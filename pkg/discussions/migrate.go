@@ -211,7 +211,8 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 		// Found our previously-migrated copy (marker-based, title-independent).
 		if opts == nil || !opts.Overwrite {
 			logger.Info("skipping already-migrated discussion", "title", string(prev.Title), "number", int(prev.Number))
-			return prev, nil
+			copyPrev := *prev
+			return &copyPrev, nil
 		}
 		// Overwrite: delete only the previously-migrated discussion
 		if err := gh.DeleteDiscussion(ctx, dst, prev); err != nil {
