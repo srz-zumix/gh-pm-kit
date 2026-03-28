@@ -52,8 +52,8 @@ func NewSearchCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	cmdutil.StringEnumFlag(cmd, &colorFlag, "color", "", render.ColorFlagAuto, render.ColorFlags, "Use color in output")
-	f.StringVarP(&repo, "repo", "R", "", "Repository in the format 'owner/repo'")
-	f.StringVar(&owner, "owner", "", "Specify the organization name")
+	f.StringVarP(&repo, "repo", "R", "", "Repository in the format '[HOST/]OWNER/REPO'. Defaults to the current repository.")
+	f.StringVar(&owner, "owner", "", "Owner in the format '[HOST/]OWNER'. Defaults to the owner of the current repository.")
 	f.StringSliceVarP(&labels, "label", "l", []string{}, "Filter discussions by labels")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
