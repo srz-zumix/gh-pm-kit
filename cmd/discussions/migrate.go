@@ -2,7 +2,6 @@
 package discussions
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -56,7 +55,7 @@ func NewMigrateCmd() *cobra.Command {
 				Purge:             purge,
 			}
 
-			ctx := context.Background()
+			ctx := cmd.Context()
 			renderer := render.NewRenderer(opts.Exporter)
 			renderer.SetColor(colorFlag)
 

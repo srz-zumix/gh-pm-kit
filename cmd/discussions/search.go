@@ -2,7 +2,6 @@
 package discussions
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -41,7 +40,7 @@ func NewSearchCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to create GitHub client: %w", err)
 			}
-			ctx := context.Background()
+			ctx := cmd.Context()
 			discussions, err := gh.SearchDiscussions(ctx, client, repository, query)
 			if err != nil {
 				return fmt.Errorf("failed to search discussions: %w", err)

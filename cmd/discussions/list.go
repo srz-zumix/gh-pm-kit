@@ -2,7 +2,6 @@
 package discussions
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -34,7 +33,7 @@ func NewListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to create GitHub client: %w", err)
 			}
-			ctx := context.Background()
+			ctx := cmd.Context()
 			discussions, err := gh.ListDiscussions(ctx, client, repository, 100)
 			if err != nil {
 				return fmt.Errorf("failed to list discussions: %w", err)

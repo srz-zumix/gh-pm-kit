@@ -240,8 +240,9 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 		return fmt.Errorf("failed to get reactions for discussion #%d: %w", number, err)
 	}
 	for _, r := range uniqueReactions(reactions) {
-		// Ignore errors (e.g. already reacted, or reaction not supported on destination)
-		_ = gh.AddReaction(ctx, dst, dstDisc, string(r.Content))
+		if err := gh.AddReaction(ctx, dst, dstDisc, string(r.Content)); err != nil {
+			logger.Warn("failed to add reaction to discussion", "reaction", string(r.Content), "discussion", number, "error", err)
+		}
 	}
 
 	// Migrate comments
@@ -256,7 +257,9 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 			return fmt.Errorf("failed to create comment: %w", err)
 		}
 		for _, r := range uniqueReactions(comment.Reactions.Nodes) {
-			_ = gh.AddReaction(ctx, dst, dstCommentID, string(r.Content))
+			if err := gh.AddReaction(ctx, dst, dstCommentID, string(r.Content)); err != nil {
+				logger.Warn("failed to add reaction to comment", "reaction", string(r.Content), "comment", string(comment.ID), "error", err)
+			}
 		}
 		// Migrate replies; fetch reply reactions separately to avoid GraphQL node limit
 		for _, reply := range comment.Replies.Nodes {
@@ -270,7 +273,9 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 				return fmt.Errorf("failed to get reactions for reply %s: %w", reply.ID, err)
 			}
 			for _, r := range uniqueReactions(replyReactions) {
-				_ = gh.AddReaction(ctx, dst, dstReplyID, string(r.Content))
+				if err := gh.AddReaction(ctx, dst, dstReplyID, string(r.Content)); err != nil {
+					logger.Warn("failed to add reaction to reply", "reaction", string(r.Content), "reply", string(reply.ID), "error", err)
+				}
 			}
 		}
 	}
