@@ -270,7 +270,8 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 			}
 			replyReactions, err := gh.GetNodeReactions(ctx, src, string(reply.ID))
 			if err != nil {
-				return fmt.Errorf("failed to get reactions for reply %s: %w", reply.ID, err)
+				logger.Warn("failed to get reactions for reply", "reply", string(reply.ID), "error", err)
+				continue
 			}
 			for _, r := range uniqueReactions(replyReactions) {
 				if err := gh.AddReaction(ctx, dst, dstReplyID, string(r.Content)); err != nil {
