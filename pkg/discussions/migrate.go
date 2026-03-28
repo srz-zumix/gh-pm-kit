@@ -23,6 +23,58 @@ type MigrateOptions struct {
 	Overwrite bool
 }
 
+// dstMigrationContext holds pre-fetched destination state shared across multiple migrations.
+// This avoids redundant API calls when migrating many discussions in a loop.
+type dstMigrationContext struct {
+	repoID          githubv4.ID
+	categories      []gh.DiscussionCategory
+	existingByTitle map[string]gh.Discussion
+}
+
+// prepareDstContext fetches the destination repository node ID, discussion categories
+// (enabling Discussions if requested), and builds a title→discussion lookup once.
+func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstRepo repository.Repository, opts *MigrateOptions) (*dstMigrationContext, error) {
+	repoID, err := gh.GetRepositoryNodeID(ctx, dst, dstRepo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get repository ID for '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
+	}
+
+	categories, err := gh.ListDiscussionCategories(ctx, dst, dstRepo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
+	}
+
+	if len(categories) == 0 {
+		if opts == nil || !opts.EnableDiscussions {
+			return nil, fmt.Errorf("discussions are not enabled in destination repository '%s/%s'", dstRepo.Owner, dstRepo.Name)
+		}
+		// Enable Discussions on the destination repository
+		if _, err := gh.EnableDiscussions(ctx, dst, dstRepo); err != nil {
+			return nil, fmt.Errorf("failed to enable discussions in destination repository '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
+		}
+		// Re-fetch categories after enabling Discussions
+		categories, err = gh.ListDiscussionCategories(ctx, dst, dstRepo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
+		}
+	}
+
+	existing, err := gh.ListDiscussions(ctx, dst, dstRepo, 100)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
+	}
+	byTitle := make(map[string]gh.Discussion, len(existing))
+	for _, d := range existing {
+		byTitle[string(d.Title)] = d
+	}
+
+	return &dstMigrationContext{
+		repoID:          repoID,
+		categories:      categories,
+		existingByTitle: byTitle,
+	}, nil
+}
+
 // findDiscussionCategoryBySlug returns the category matching slug (case-insensitive).
 func findDiscussionCategoryBySlug(categories []gh.DiscussionCategory, slug string) *gh.DiscussionCategory {
 	for i := range categories {
@@ -47,19 +99,30 @@ func MigrateDiscussion(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, 
 		return nil, fmt.Errorf("failed to get source discussion #%d in '%s/%s': %w", discussionNumber, srcRepo.Owner, srcRepo.Name, err)
 	}
 
-	return migrateDiscussion(ctx, src, srcRepo, dst, dstRepo, srcDiscussion, opts)
+	dstCtx, err := prepareDstContext(ctx, dst, dstRepo, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return migrateDiscussion(ctx, src, srcRepo, dst, dstRepo, srcDiscussion, dstCtx, opts)
 }
 
 // MigrateDiscussions migrates all discussions from src repo to dst repo.
+// It prefetches destination repository state once before iterating source discussions.
 func MigrateDiscussions(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, dstRepo repository.Repository, opts *MigrateOptions) ([]*gh.Discussion, error) {
 	srcDiscussions, err := gh.ListDiscussions(ctx, src, srcRepo, 100)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", srcRepo.Owner, srcRepo.Name, err)
 	}
 
+	dstCtx, err := prepareDstContext(ctx, dst, dstRepo, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	var results []*gh.Discussion
 	for i := range srcDiscussions {
-		d, err := migrateDiscussion(ctx, src, srcRepo, dst, dstRepo, &srcDiscussions[i], opts)
+		d, err := migrateDiscussion(ctx, src, srcRepo, dst, dstRepo, &srcDiscussions[i], dstCtx, opts)
 		if err != nil {
 			return results, err
 		}
@@ -68,76 +131,44 @@ func MigrateDiscussions(ctx context.Context, src, dst *gh.GitHubClient, srcRepo,
 	return results, nil
 }
 
-// migrateDiscussion copies a single Discussion (with reactions and comments) to dstRepo on dst client.
-func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstRepo repository.Repository, srcDisc *gh.Discussion, opts *MigrateOptions) (*gh.Discussion, error) {
-	dstRepoID, err := gh.GetRepositoryNodeID(ctx, dst, dstRepo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get repository ID for '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
-	}
-
-	dstCategories, err := gh.ListDiscussionCategories(ctx, dst, dstRepo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
-	}
-
+// migrateDiscussion copies srcDisc to dstRepo using pre-fetched dstCtx.
+func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstRepo repository.Repository, srcDisc *gh.Discussion, dstCtx *dstMigrationContext, opts *MigrateOptions) (*gh.Discussion, error) {
 	slug := string(srcDisc.Category.Slug)
 	if opts != nil && opts.CategorySlug != "" {
 		slug = opts.CategorySlug
 	}
 
-	if len(dstCategories) == 0 {
-		if opts == nil || !opts.EnableDiscussions {
-			return nil, fmt.Errorf("discussions are not enabled in destination repository '%s/%s'", dstRepo.Owner, dstRepo.Name)
-		}
-		// Enable Discussions on the destination repository
-		_, err := gh.EnableDiscussions(ctx, dst, dstRepo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to enable discussions in destination repository '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
-		}
-		// Re-fetch categories after enabling Discussions
-		dstCategories, err = gh.ListDiscussionCategories(ctx, dst, dstRepo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
-		}
-	}
-
-	dstCategory := findDiscussionCategoryBySlug(dstCategories, slug)
+	dstCategory := findDiscussionCategoryBySlug(dstCtx.categories, slug)
 	if dstCategory == nil {
-		availableSlugs := make([]string, len(dstCategories))
-		for i, c := range dstCategories {
+		availableSlugs := make([]string, len(dstCtx.categories))
+		for i, c := range dstCtx.categories {
 			availableSlugs[i] = string(c.Slug)
 		}
 		return nil, fmt.Errorf("category with slug %q not found in destination repository '%s/%s' (available: %s)", slug, dstRepo.Owner, dstRepo.Name, strings.Join(availableSlugs, ", "))
 	}
 
-	// Check for an existing discussion with the same title
-	dstDiscussions, err := gh.ListDiscussions(ctx, dst, dstRepo, 100)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
-	}
-	for i := range dstDiscussions {
-		if dstDiscussions[i].Title == srcDisc.Title {
-			if opts == nil || !opts.Overwrite {
-				// Already migrated; skip
-				logger.Info("skipping already-migrated discussion", "title", string(dstDiscussions[i].Title), "number", int(dstDiscussions[i].Number))
-				return &dstDiscussions[i], nil
-			}
-			// Overwrite: delete existing discussion first
-			if err := gh.DeleteDiscussion(ctx, dst, dstDiscussions[i]); err != nil {
-				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", string(dstDiscussions[i].Title), dstRepo.Owner, dstRepo.Name, err)
-			}
-			break
+	title := string(srcDisc.Title)
+	if existing, ok := dstCtx.existingByTitle[title]; ok {
+		if opts == nil || !opts.Overwrite {
+			// Already migrated; skip
+			logger.Info("skipping already-migrated discussion", "title", title, "number", int(existing.Number))
+			return &existing, nil
 		}
+		// Overwrite: delete existing discussion first, then remove from cache
+		if err := gh.DeleteDiscussion(ctx, dst, existing); err != nil {
+			return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
+		}
+		delete(dstCtx.existingByTitle, title)
 	}
 
 	created, err := gh.CreateDiscussion(ctx, dst, gh.CreateDiscussionInput{
-		RepositoryID: dstRepoID,
+		RepositoryID: dstCtx.repoID,
 		CategoryID:   githubv4.ID(dstCategory.ID),
 		Title:        srcDisc.Title,
 		Body:         srcDisc.Body,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create discussion %q in '%s/%s': %w", string(srcDisc.Title), dstRepo.Owner, dstRepo.Name, err)
+		return nil, fmt.Errorf("failed to create discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
 	}
 
 	if err := migrateReactionsAndComments(ctx, src, srcRepo, dst, created, srcDisc); err != nil {
