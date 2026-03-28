@@ -9,7 +9,6 @@ import (
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/shurcooL/githubv4"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
-	"github.com/srz-zumix/go-gh-extension/pkg/gh/client"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 )
 
@@ -43,7 +42,7 @@ func MigrateDiscussion(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, 
 		return nil, fmt.Errorf("failed to parse discussion number: %w", err)
 	}
 
-	srcDiscussion, err := src.GetDiscussion(ctx, srcRepo.Owner, srcRepo.Name, discussionNumber)
+	srcDiscussion, err := gh.GetDiscussionByNumber(ctx, src, srcRepo, discussionNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source discussion #%d in '%s/%s': %w", discussionNumber, srcRepo.Owner, srcRepo.Name, err)
 	}
@@ -53,7 +52,7 @@ func MigrateDiscussion(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, 
 
 // MigrateDiscussions migrates all discussions from src repo to dst repo.
 func MigrateDiscussions(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, dstRepo repository.Repository, opts *MigrateOptions) ([]*gh.Discussion, error) {
-	srcDiscussions, err := src.ListDiscussions(ctx, srcRepo.Owner, srcRepo.Name, 100)
+	srcDiscussions, err := gh.ListDiscussions(ctx, src, srcRepo, 100)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", srcRepo.Owner, srcRepo.Name, err)
 	}
@@ -71,12 +70,12 @@ func MigrateDiscussions(ctx context.Context, src, dst *gh.GitHubClient, srcRepo,
 
 // migrateDiscussion copies a single Discussion (with reactions and comments) to dstRepo on dst client.
 func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstRepo repository.Repository, srcDisc *gh.Discussion, opts *MigrateOptions) (*gh.Discussion, error) {
-	dstRepoID, err := dst.GetRepositoryNodeID(ctx, dstRepo.Owner, dstRepo.Name)
+	dstRepoID, err := gh.GetRepositoryNodeID(ctx, dst, dstRepo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get repository ID for '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 	}
 
-	dstCategories, err := dst.ListDiscussionCategories(ctx, dstRepo.Owner, dstRepo.Name)
+	dstCategories, err := gh.ListDiscussionCategories(ctx, dst, dstRepo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 	}
@@ -96,7 +95,7 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 			return nil, fmt.Errorf("failed to enable discussions in destination repository '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 		}
 		// Re-fetch categories after enabling Discussions
-		dstCategories, err = dst.ListDiscussionCategories(ctx, dstRepo.Owner, dstRepo.Name)
+		dstCategories, err = gh.ListDiscussionCategories(ctx, dst, dstRepo)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list categories in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 		}
@@ -112,7 +111,7 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	}
 
 	// Check for an existing discussion with the same title
-	dstDiscussions, err := dst.ListDiscussions(ctx, dstRepo.Owner, dstRepo.Name, 100)
+	dstDiscussions, err := gh.ListDiscussions(ctx, dst, dstRepo, 100)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 	}
@@ -124,14 +123,14 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 				return &d, nil
 			}
 			// Overwrite: delete existing discussion first
-			if err := dst.DeleteDiscussion(ctx, string(d.ID)); err != nil {
+			if err := gh.DeleteDiscussion(ctx, dst, d); err != nil {
 				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", string(d.Title), dstRepo.Owner, dstRepo.Name, err)
 			}
 			break
 		}
 	}
 
-	created, err := dst.CreateDiscussion(ctx, client.CreateDiscussionInput{
+	created, err := gh.CreateDiscussion(ctx, dst, gh.CreateDiscussionInput{
 		RepositoryID: dstRepoID,
 		CategoryID:   githubv4.ID(dstCategory.ID),
 		Title:        srcDisc.Title,
@@ -151,45 +150,44 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 // migrateReactionsAndComments copies reactions and comments (with replies and their reactions) from a source discussion.
 func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstDisc *gh.Discussion, srcDisc *gh.Discussion) error {
 	number := int(srcDisc.Number)
-	dstDiscID := string(dstDisc.ID)
 
 	// Migrate discussion-level reactions
-	reactions, err := src.GetDiscussionReactions(ctx, srcRepo.Owner, srcRepo.Name, number)
+	reactions, err := gh.GetDiscussionReactions(ctx, src, srcRepo, number)
 	if err != nil {
 		return fmt.Errorf("failed to get reactions for discussion #%d: %w", number, err)
 	}
 	for _, r := range uniqueReactions(reactions) {
 		// Ignore errors (e.g. already reacted, or reaction not supported on destination)
-		_ = dst.AddReaction(ctx, dstDiscID, string(r.Content))
+		_ = gh.AddReaction(ctx, dst, dstDisc, string(r.Content))
 	}
 
 	// Migrate comments
-	comments, err := src.ListDiscussionComments(ctx, srcRepo.Owner, srcRepo.Name, number)
+	comments, err := gh.ListDiscussionComments(ctx, src, srcRepo, number)
 	if err != nil {
 		return fmt.Errorf("failed to get comments for discussion #%d: %w", number, err)
 	}
 	for _, comment := range comments {
 		body := formatMigratedBody(string(comment.Author.Login), string(comment.Body))
-		dstCommentID, err := dst.CreateDiscussionComment(ctx, dstDiscID, body)
+		dstCommentID, err := gh.CreateDiscussionComment(ctx, dst, dstDisc, body)
 		if err != nil {
 			return fmt.Errorf("failed to create comment: %w", err)
 		}
 		for _, r := range uniqueReactions(comment.Reactions.Nodes) {
-			_ = dst.AddReaction(ctx, dstCommentID, string(r.Content))
+			_ = gh.AddReaction(ctx, dst, dstCommentID, string(r.Content))
 		}
 		// Migrate replies; fetch reply reactions separately to avoid GraphQL node limit
 		for _, reply := range comment.Replies.Nodes {
 			replyBody := formatMigratedBody(string(reply.Author.Login), string(reply.Body))
-			dstReplyID, err := dst.AddDiscussionCommentReply(ctx, dstDiscID, dstCommentID, replyBody)
+			dstReplyID, err := gh.AddDiscussionCommentReply(ctx, dst, dstDisc, dstCommentID, replyBody)
 			if err != nil {
 				return fmt.Errorf("failed to create reply: %w", err)
 			}
-			replyReactions, err := src.GetNodeReactions(ctx, string(reply.ID))
+			replyReactions, err := gh.GetNodeReactions(ctx, src, string(reply.ID))
 			if err != nil {
 				return fmt.Errorf("failed to get reactions for reply %s: %w", reply.ID, err)
 			}
 			for _, r := range uniqueReactions(replyReactions) {
-				_ = dst.AddReaction(ctx, dstReplyID, string(r.Content))
+				_ = gh.AddReaction(ctx, dst, dstReplyID, string(r.Content))
 			}
 		}
 	}
@@ -205,9 +203,9 @@ func formatMigratedBody(authorLogin, body string) string {
 }
 
 // uniqueReactions deduplicates reactions by content, keeping the first occurrence.
-func uniqueReactions(reactions []client.Reaction) []client.Reaction {
+func uniqueReactions(reactions []gh.Reaction) []gh.Reaction {
 	seen := make(map[string]bool)
-	var result []client.Reaction
+	var result []gh.Reaction
 	for _, r := range reactions {
 		c := string(r.Content)
 		if !seen[c] {
