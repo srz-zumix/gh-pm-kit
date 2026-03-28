@@ -3,6 +3,7 @@ package discussions
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -28,8 +29,11 @@ type MigrateOptions struct {
 
 // migratedFromMarker returns the hidden HTML comment embedded in migrated discussion bodies
 // to identify the migration source, enabling idempotent re-runs.
+// The source repository identity is SHA-256 hashed to avoid leaking host/owner/repo names.
 func migratedFromMarker(srcRepo repository.Repository, number int) string {
-	return fmt.Sprintf("<!-- gh-pm-kit:migrated-from:%s:%s/%s#%d -->", srcRepo.Host, srcRepo.Owner, srcRepo.Name, number)
+	repoKey := fmt.Sprintf("%s:%s/%s", srcRepo.Host, srcRepo.Owner, srcRepo.Name)
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(repoKey)))
+	return fmt.Sprintf("<!-- gh-pm-kit:migrated-from:%s#%d -->", hash, number)
 }
 
 // isMigratedDiscussion reports whether a discussion body contains the given migration marker.
@@ -42,7 +46,33 @@ func isMigratedDiscussion(body, marker string) bool {
 type dstMigrationContext struct {
 	repoID     githubv4.ID
 	categories []gh.DiscussionCategory
-	byTitle    map[string][]gh.Discussion // title → all matching discussions
+	all        []gh.Discussion            // all existing discussions (scanned for markers)
+	byTitle    map[string][]gh.Discussion // title → matching discussions (used for --purge only)
+}
+
+// removeDiscussion removes the discussion with the given node ID from both caches.
+func (c *dstMigrationContext) removeDiscussion(id string) {
+	for i := range c.all {
+		if string(c.all[i].ID) == id {
+			c.all[i] = c.all[len(c.all)-1]
+			c.all = c.all[:len(c.all)-1]
+			break
+		}
+	}
+	for title, list := range c.byTitle {
+		for i, d := range list {
+			if string(d.ID) == id {
+				list[i] = list[len(list)-1]
+				list = list[:len(list)-1]
+				if len(list) == 0 {
+					delete(c.byTitle, title)
+				} else {
+					c.byTitle[title] = list
+				}
+				return
+			}
+		}
+	}
 }
 
 // prepareDstContext fetches the destination repository node ID, discussion categories
@@ -86,6 +116,7 @@ func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstRepo reposi
 	return &dstMigrationContext{
 		repoID:     repoID,
 		categories: categories,
+		all:        existing,
 		byTitle:    byTitle,
 	}, nil
 }
@@ -103,7 +134,8 @@ func findDiscussionCategoryBySlug(categories []gh.DiscussionCategory, slug strin
 // MigrateDiscussion migrates a single discussion from src repo to dst repo.
 // It copies the title, body, category, reactions, and comments (with replies and reactions).
 // src and dst may be different hosts (GHE ↔ github.com).
-func MigrateDiscussion(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, dstRepo repository.Repository, number any, opts *MigrateOptions) (*gh.Discussion, error) {
+// number must be a discussion number (e.g. "42") or a discussion URL.
+func MigrateDiscussion(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, dstRepo repository.Repository, number string, opts *MigrateOptions) (*gh.Discussion, error) {
 	discussionNumber, err := gh.GetDiscussionNumber(number)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse discussion number: %w", err)
@@ -165,41 +197,28 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	marker := migratedFromMarker(srcRepo, int(srcDisc.Number))
 	title := string(srcDisc.Title)
 
-	if matches, ok := dstCtx.byTitle[title]; ok {
-		if opts != nil && opts.Purge {
-			// Purge all title-matched discussions regardless of migration marker
+	if opts != nil && opts.Purge {
+		// Purge all title-matched discussions regardless of migration marker
+		if matches, ok := dstCtx.byTitle[title]; ok {
 			for _, d := range matches {
 				if err := gh.DeleteDiscussion(ctx, dst, d); err != nil {
 					return nil, fmt.Errorf("failed to delete discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
 				}
-			}
-			delete(dstCtx.byTitle, title)
-		} else if idx := findMigratedDiscussionIndex(matches, marker); idx >= 0 {
-			if opts == nil || !opts.Overwrite {
-				// Already migrated by us; skip
-				d := &matches[idx]
-				logger.Info("skipping already-migrated discussion", "title", title, "number", int(d.Number))
-				return d, nil
-			}
-			// Overwrite: delete only the previously-migrated discussion
-			if err := gh.DeleteDiscussion(ctx, dst, matches[idx]); err != nil {
-				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
-			}
-			// Remove the deleted entry from the cache
-			remaining := make([]gh.Discussion, 0, len(matches)-1)
-			for i, d := range matches {
-				if i != idx {
-					remaining = append(remaining, d)
-				}
-			}
-			if len(remaining) == 0 {
-				delete(dstCtx.byTitle, title)
-			} else {
-				dstCtx.byTitle[title] = remaining
+				dstCtx.removeDiscussion(string(d.ID))
 			}
 		}
-		// No marker match and no purge: other discussions share this title but weren't migrated
-		// by us; proceed to create a new migration alongside them.
+	} else if prev := findDiscussionByMarker(dstCtx.all, marker); prev != nil {
+		// Found our previously-migrated copy (marker-based, title-independent).
+		if opts == nil || !opts.Overwrite {
+			logger.Info("skipping already-migrated discussion", "title", string(prev.Title), "number", int(prev.Number))
+			return prev, nil
+		}
+		// Overwrite: delete only the previously-migrated discussion
+		if err := gh.DeleteDiscussion(ctx, dst, prev); err != nil {
+			return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", string(prev.Title), dstRepo.Owner, dstRepo.Name, err)
+		}
+		dstCtx.removeDiscussion(string(prev.ID))
+		// No marker and no purge: proceed to create alongside any other same-title discussions.
 	}
 
 	created, err := gh.CreateDiscussion(ctx, dst, gh.CreateDiscussionInput{
@@ -219,29 +238,30 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	return created, nil
 }
 
-// findMigratedDiscussionIndex returns the index in discussions whose body contains marker,
-// or -1 if none is found.
-func findMigratedDiscussionIndex(discussions []gh.Discussion, marker string) int {
-	for i := range discussions {
-		if isMigratedDiscussion(string(discussions[i].Body), marker) {
-			return i
+// findDiscussionByMarker returns a pointer to the first discussion in all whose body contains
+// marker, or nil if none is found. The search is title-independent so it still works when the
+// destination discussion title was edited after a previous migration run.
+func findDiscussionByMarker(all []gh.Discussion, marker string) *gh.Discussion {
+	for i := range all {
+		if isMigratedDiscussion(string(all[i].Body), marker) {
+			return &all[i]
 		}
 	}
-	return -1
+	return nil
 }
 
 // migrateReactionsAndComments copies reactions and comments (with replies and their reactions) from a source discussion.
 func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstDisc *gh.Discussion, srcDisc *gh.Discussion) error {
 	number := int(srcDisc.Number)
 
-	// Migrate discussion-level reactions
+	// Migrate discussion-level reactions as a summary comment
 	reactions, err := gh.GetDiscussionReactions(ctx, src, srcRepo, number)
 	if err != nil {
 		return fmt.Errorf("failed to get reactions for discussion #%d: %w", number, err)
 	}
-	for _, r := range uniqueReactions(reactions) {
-		if err := gh.AddReaction(ctx, dst, dstDisc, string(r.Content)); err != nil {
-			logger.Warn("failed to add reaction to discussion", "reaction", string(r.Content), "discussion", number, "error", err)
+	if len(reactions) > 0 {
+		if _, err := gh.CreateDiscussionComment(ctx, dst, dstDisc, formatReactionsComment(reactions)); err != nil {
+			logger.Warn("failed to post reaction summary for discussion", "discussion", number, "error", err)
 		}
 	}
 
@@ -256,9 +276,10 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 		if err != nil {
 			return fmt.Errorf("failed to create comment: %w", err)
 		}
-		for _, r := range uniqueReactions(comment.Reactions.Nodes) {
-			if err := gh.AddReaction(ctx, dst, dstCommentID, string(r.Content)); err != nil {
-				logger.Warn("failed to add reaction to comment", "reaction", string(r.Content), "comment", string(comment.ID), "error", err)
+		if len(comment.Reactions.Nodes) > 0 {
+			replyBody := formatReactionsComment(comment.Reactions.Nodes)
+			if _, err := gh.AddDiscussionCommentReply(ctx, dst, dstDisc, dstCommentID, replyBody); err != nil {
+				logger.Warn("failed to post reaction summary for comment", "comment", string(comment.ID), "error", err)
 			}
 		}
 		// Migrate replies; fetch reply reactions separately to avoid GraphQL node limit
@@ -273,9 +294,10 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 				logger.Warn("failed to get reactions for reply", "reply", string(reply.ID), "error", err)
 				continue
 			}
-			for _, r := range uniqueReactions(replyReactions) {
-				if err := gh.AddReaction(ctx, dst, dstReplyID, string(r.Content)); err != nil {
-					logger.Warn("failed to add reaction to reply", "reaction", string(r.Content), "reply", string(reply.ID), "error", err)
+			if len(replyReactions) > 0 {
+				reactionBody := formatReactionsComment(replyReactions)
+				if _, err := gh.AddDiscussionCommentReply(ctx, dst, dstDisc, dstReplyID, reactionBody); err != nil {
+					logger.Warn("failed to post reaction summary for reply", "reply", string(reply.ID), "error", err)
 				}
 			}
 		}
@@ -291,16 +313,58 @@ func formatMigratedBody(authorLogin, body string) string {
 	return fmt.Sprintf("> *Originally posted by @%s*\n\n%s", authorLogin, body)
 }
 
-// uniqueReactions deduplicates reactions by content, keeping the first occurrence.
-func uniqueReactions(reactions []gh.Reaction) []gh.Reaction {
-	seen := make(map[string]bool)
-	var result []gh.Reaction
+// formatReactionsComment formats a list of reactions as a summary comment.
+// Each emoji is listed with the usernames of those who reacted.
+func formatReactionsComment(reactions []gh.Reaction) string {
+	type entry struct {
+		emoji string
+		users []string
+	}
+	order := []string{}
+	byEmoji := map[string]*entry{}
 	for _, r := range reactions {
-		c := string(r.Content)
-		if !seen[c] {
-			seen[c] = true
-			result = append(result, r)
+		emoji := reactionEmoji(string(r.Content))
+		login := string(r.User.Login)
+		if e, ok := byEmoji[emoji]; ok {
+			e.users = append(e.users, login)
+		} else {
+			byEmoji[emoji] = &entry{emoji: emoji, users: []string{login}}
+			order = append(order, emoji)
 		}
 	}
-	return result
+	var sb strings.Builder
+	sb.WriteString("> *Reactions from original discussion:*")
+	for _, emoji := range order {
+		e := byEmoji[emoji]
+		users := make([]string, len(e.users))
+		for i, u := range e.users {
+			users[i] = "@" + u
+		}
+		fmt.Fprintf(&sb, "\n> %s %s", emoji, strings.Join(users, ", "))
+	}
+	return sb.String()
+}
+
+// reactionEmoji converts a GitHub reaction content string to its emoji representation.
+func reactionEmoji(content string) string {
+	switch content {
+	case "THUMBS_UP":
+		return "👍"
+	case "THUMBS_DOWN":
+		return "👎"
+	case "LAUGH":
+		return "😄"
+	case "HOORAY":
+		return "🎉"
+	case "CONFUSED":
+		return "😕"
+	case "HEART":
+		return "❤️"
+	case "ROCKET":
+		return "🚀"
+	case "EYES":
+		return "👀"
+	default:
+		return content
+	}
 }

@@ -7,7 +7,7 @@ require (
 	github.com/cli/go-gh/v2 v2.13.0
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7
 	github.com/spf13/cobra v1.10.2
-	github.com/srz-zumix/go-gh-extension v0.4.6
+	github.com/srz-zumix/go-gh-extension v0.4.7
 )
 
 require (
