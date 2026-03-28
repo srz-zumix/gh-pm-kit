@@ -115,16 +115,16 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 	}
-	for _, d := range dstDiscussions {
-		if d.Title == srcDisc.Title {
+	for i := range dstDiscussions {
+		if dstDiscussions[i].Title == srcDisc.Title {
 			if opts == nil || !opts.Overwrite {
 				// Already migrated; skip
-				logger.Info("skipping already-migrated discussion", "title", string(d.Title), "number", int(d.Number))
-				return &d, nil
+				logger.Info("skipping already-migrated discussion", "title", string(dstDiscussions[i].Title), "number", int(dstDiscussions[i].Number))
+				return &dstDiscussions[i], nil
 			}
 			// Overwrite: delete existing discussion first
-			if err := gh.DeleteDiscussion(ctx, dst, d); err != nil {
-				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", string(d.Title), dstRepo.Owner, dstRepo.Name, err)
+			if err := gh.DeleteDiscussion(ctx, dst, dstDiscussions[i]); err != nil {
+				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", string(dstDiscussions[i].Title), dstRepo.Owner, dstRepo.Name, err)
 			}
 			break
 		}
