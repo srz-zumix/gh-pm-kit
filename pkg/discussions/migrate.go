@@ -18,21 +18,35 @@ type MigrateOptions struct {
 	CategorySlug string
 	// EnableDiscussions enables Discussions on the destination repository if not already enabled.
 	EnableDiscussions bool
-	// Overwrite deletes an existing discussion with the same title before migrating.
+	// Overwrite deletes the previously-migrated discussion (identified by marker) and recreates it.
 	// Without this option, an already-migrated discussion is skipped.
 	Overwrite bool
+	// Purge deletes ALL discussions matching the source title before migrating.
+	// This is a destructive operation and overrides Overwrite.
+	Purge bool
+}
+
+// migratedFromMarker returns the hidden HTML comment embedded in migrated discussion bodies
+// to identify the migration source, enabling idempotent re-runs.
+func migratedFromMarker(srcRepo repository.Repository, number int) string {
+	return fmt.Sprintf("<!-- gh-pm-kit:migrated-from:%s/%s#%d -->", srcRepo.Owner, srcRepo.Name, number)
+}
+
+// isMigratedDiscussion reports whether a discussion body contains the given migration marker.
+func isMigratedDiscussion(body, marker string) bool {
+	return strings.Contains(body, marker)
 }
 
 // dstMigrationContext holds pre-fetched destination state shared across multiple migrations.
 // This avoids redundant API calls when migrating many discussions in a loop.
 type dstMigrationContext struct {
-	repoID          githubv4.ID
-	categories      []gh.DiscussionCategory
-	existingByTitle map[string]gh.Discussion
+	repoID     githubv4.ID
+	categories []gh.DiscussionCategory
+	byTitle    map[string][]gh.Discussion // title → all matching discussions
 }
 
 // prepareDstContext fetches the destination repository node ID, discussion categories
-// (enabling Discussions if requested), and builds a title→discussion lookup once.
+// (enabling Discussions if requested), and builds a title→discussions lookup once.
 func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstRepo repository.Repository, opts *MigrateOptions) (*dstMigrationContext, error) {
 	repoID, err := gh.GetRepositoryNodeID(ctx, dst, dstRepo)
 	if err != nil {
@@ -63,15 +77,16 @@ func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstRepo reposi
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", dstRepo.Owner, dstRepo.Name, err)
 	}
-	byTitle := make(map[string]gh.Discussion, len(existing))
+	byTitle := make(map[string][]gh.Discussion, len(existing))
 	for _, d := range existing {
-		byTitle[string(d.Title)] = d
+		t := string(d.Title)
+		byTitle[t] = append(byTitle[t], d)
 	}
 
 	return &dstMigrationContext{
-		repoID:          repoID,
-		categories:      categories,
-		existingByTitle: byTitle,
+		repoID:     repoID,
+		categories: categories,
+		byTitle:    byTitle,
 	}, nil
 }
 
@@ -147,25 +162,51 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 		return nil, fmt.Errorf("category with slug %q not found in destination repository '%s/%s' (available: %s)", slug, dstRepo.Owner, dstRepo.Name, strings.Join(availableSlugs, ", "))
 	}
 
+	marker := migratedFromMarker(srcRepo, int(srcDisc.Number))
 	title := string(srcDisc.Title)
-	if existing, ok := dstCtx.existingByTitle[title]; ok {
-		if opts == nil || !opts.Overwrite {
-			// Already migrated; skip
-			logger.Info("skipping already-migrated discussion", "title", title, "number", int(existing.Number))
-			return &existing, nil
+
+	if matches, ok := dstCtx.byTitle[title]; ok {
+		if opts != nil && opts.Purge {
+			// Purge all title-matched discussions regardless of migration marker
+			for _, d := range matches {
+				if err := gh.DeleteDiscussion(ctx, dst, d); err != nil {
+					return nil, fmt.Errorf("failed to delete discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
+				}
+			}
+			delete(dstCtx.byTitle, title)
+		} else if idx := findMigratedDiscussionIndex(matches, marker); idx >= 0 {
+			if opts == nil || !opts.Overwrite {
+				// Already migrated by us; skip
+				d := &matches[idx]
+				logger.Info("skipping already-migrated discussion", "title", title, "number", int(d.Number))
+				return d, nil
+			}
+			// Overwrite: delete only the previously-migrated discussion
+			if err := gh.DeleteDiscussion(ctx, dst, matches[idx]); err != nil {
+				return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
+			}
+			// Remove the deleted entry from the cache
+			remaining := make([]gh.Discussion, 0, len(matches)-1)
+			for i, d := range matches {
+				if i != idx {
+					remaining = append(remaining, d)
+				}
+			}
+			if len(remaining) == 0 {
+				delete(dstCtx.byTitle, title)
+			} else {
+				dstCtx.byTitle[title] = remaining
+			}
 		}
-		// Overwrite: delete existing discussion first, then remove from cache
-		if err := gh.DeleteDiscussion(ctx, dst, existing); err != nil {
-			return nil, fmt.Errorf("failed to delete existing discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
-		}
-		delete(dstCtx.existingByTitle, title)
+		// No marker match and no purge: other discussions share this title but weren't migrated
+		// by us; proceed to create a new migration alongside them.
 	}
 
 	created, err := gh.CreateDiscussion(ctx, dst, gh.CreateDiscussionInput{
 		RepositoryID: dstCtx.repoID,
 		CategoryID:   githubv4.ID(dstCategory.ID),
 		Title:        srcDisc.Title,
-		Body:         srcDisc.Body,
+		Body:         githubv4.String(string(srcDisc.Body) + "\n\n" + marker),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discussion %q in '%s/%s': %w", title, dstRepo.Owner, dstRepo.Name, err)
@@ -176,6 +217,17 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	}
 
 	return created, nil
+}
+
+// findMigratedDiscussionIndex returns the index in discussions whose body contains marker,
+// or -1 if none is found.
+func findMigratedDiscussionIndex(discussions []gh.Discussion, marker string) int {
+	for i := range discussions {
+		if isMigratedDiscussion(string(discussions[i].Body), marker) {
+			return i
+		}
+	}
+	return -1
 }
 
 // migrateReactionsAndComments copies reactions and comments (with replies and their reactions) from a source discussion.

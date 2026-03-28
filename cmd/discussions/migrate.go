@@ -26,6 +26,7 @@ func NewMigrateCmd() *cobra.Command {
 	var categorySlug string
 	var enableDiscussions bool
 	var overwrite bool
+	var purge bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Migrate discussions to another repository",
@@ -52,6 +53,7 @@ func NewMigrateCmd() *cobra.Command {
 				CategorySlug:      categorySlug,
 				EnableDiscussions: enableDiscussions,
 				Overwrite:         overwrite,
+				Purge:             purge,
 			}
 
 			ctx := context.Background()
@@ -86,6 +88,8 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVar(&categorySlug, "category", "", "Override destination category slug (uses source category slug if omitted)")
 	f.BoolVar(&enableDiscussions, "enable-discussions", false, "Enable Discussions on the destination repository if not already enabled")
 	f.BoolVar(&overwrite, "overwrite", false, "Delete and re-create an already-migrated discussion (matched by title); without this flag, existing discussions are skipped")
+	f.BoolVar(&purge, "purge", false, "Delete ALL discussions matching the source title before migrating (destructive; overrides --overwrite)")
+	_ = cmd.Flags().MarkHidden("purge")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
 }
