@@ -29,7 +29,7 @@ type MigrateOptions struct {
 // migratedFromMarker returns the hidden HTML comment embedded in migrated discussion bodies
 // to identify the migration source, enabling idempotent re-runs.
 func migratedFromMarker(srcRepo repository.Repository, number int) string {
-	return fmt.Sprintf("<!-- gh-pm-kit:migrated-from:%s/%s#%d -->", srcRepo.Owner, srcRepo.Name, number)
+	return fmt.Sprintf("<!-- gh-pm-kit:migrated-from:%s:%s/%s#%d -->", srcRepo.Host, srcRepo.Owner, srcRepo.Name, number)
 }
 
 // isMigratedDiscussion reports whether a discussion body contains the given migration marker.
