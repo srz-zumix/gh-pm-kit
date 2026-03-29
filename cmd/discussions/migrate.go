@@ -26,6 +26,7 @@ func NewMigrateCmd() *cobra.Command {
 	var enableDiscussions bool
 	var overwrite bool
 	var purge bool
+	var noReactions bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
 		Short: "Migrate discussions to another repository",
@@ -53,6 +54,7 @@ func NewMigrateCmd() *cobra.Command {
 				EnableDiscussions: enableDiscussions,
 				Overwrite:         overwrite,
 				Purge:             purge,
+				IncludeReactions:  !noReactions,
 			}
 
 			ctx := cmd.Context()
@@ -85,6 +87,7 @@ func NewMigrateCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("dst")
 	f.StringVarP(&number, "number", "n", "", "Discussion number or URL to migrate (migrates all if omitted)")
 	f.StringVar(&categorySlug, "category", "", "Override destination category slug (uses source category slug if omitted)")
+	f.BoolVar(&noReactions, "no-reactions", false, "Do not embed reaction summaries into migrated discussion and comment bodies")
 	f.BoolVar(&enableDiscussions, "enable-discussions", false, "Enable Discussions on the destination repository if not already enabled")
 	f.BoolVar(&overwrite, "overwrite", false, "Delete and re-create a previously migrated discussion when a same-title discussion containing a migration marker is found; without this flag, such marked discussions are skipped and unmarked discussions are left untouched (a new discussion is created alongside them)")
 	f.BoolVar(&purge, "purge", false, "Delete ALL discussions matching the source title before migrating (destructive; overrides --overwrite)")
