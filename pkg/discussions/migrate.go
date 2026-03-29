@@ -18,7 +18,7 @@ type MigrateOptions struct {
 	CategorySlug string
 	// EnableDiscussions enables Discussions on the destination repository if not already enabled.
 	EnableDiscussions bool
-	// Overwrite deletes the previously-migrated discussion (identified by marker) and recreates it.
+	// Overwrite updates the previously-migrated discussion in place (identified by marker) and replaces its comments.
 	// Without this option, an already-migrated discussion is skipped.
 	Overwrite bool
 	// Purge deletes ALL discussions matching the source title before migrating.
