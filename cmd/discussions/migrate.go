@@ -25,7 +25,7 @@ func NewMigrateCmd() *cobra.Command {
 	var categorySlug string
 	var enableDiscussions bool
 	var overwrite bool
-	var purge bool
+	var prune bool
 	var noReactions bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -53,7 +53,7 @@ func NewMigrateCmd() *cobra.Command {
 				CategorySlug:      categorySlug,
 				EnableDiscussions: enableDiscussions,
 				Overwrite:         overwrite,
-				Purge:             purge,
+				Prune:             prune,
 				IncludeReactions:  !noReactions,
 			}
 
@@ -90,8 +90,8 @@ func NewMigrateCmd() *cobra.Command {
 	f.BoolVar(&noReactions, "no-reactions", false, "Do not embed reaction summaries into migrated discussion and comment bodies")
 	f.BoolVar(&enableDiscussions, "enable-discussions", false, "Enable Discussions on the destination repository if not already enabled")
 	f.BoolVar(&overwrite, "overwrite", false, "Overwrite the contents of a previously migrated discussion when a migration marker is found (independent of title); without this flag, such marked discussions are skipped and unmarked discussions are left untouched (a new discussion is created alongside them)")
-	f.BoolVar(&purge, "purge", false, "Delete ALL discussions matching the source title before migrating (destructive; overrides --overwrite)")
-	_ = cmd.Flags().MarkHidden("purge")
+	f.BoolVar(&prune, "prune", false, "Delete ALL discussions matching the source title before migrating (destructive; overrides --overwrite)")
+	_ = cmd.Flags().MarkHidden("prune")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
 }

@@ -21,9 +21,9 @@ type MigrateOptions struct {
 	// Overwrite updates the previously-migrated discussion in place (identified by marker) and replaces its comments.
 	// Without this option, an already-migrated discussion is skipped.
 	Overwrite bool
-	// Purge deletes ALL discussions matching the source title before migrating.
+	// Prune deletes ALL discussions matching the source title before migrating.
 	// This is a destructive operation and overrides Overwrite.
-	Purge bool
+	Prune bool
 	// IncludeReactions embeds reaction summaries into migrated discussion and comment bodies.
 	IncludeReactions bool
 }
@@ -48,7 +48,7 @@ type dstMigrationContext struct {
 	repoID     string
 	categories []gh.DiscussionCategory
 	all        []gh.Discussion            // all existing discussions (scanned for markers)
-	byTitle    map[string][]gh.Discussion // title → matching discussions (used for --purge only)
+	byTitle    map[string][]gh.Discussion // title → matching discussions (used for --prune only)
 }
 
 // removeDiscussion removes the discussion with the given node ID from both caches.
@@ -198,8 +198,8 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 	marker := migratedFromMarker(srcRepo, srcDisc.Number)
 	title := srcDisc.Title
 
-	if opts != nil && opts.Purge {
-		// Purge all title-matched discussions regardless of migration marker
+	if opts != nil && opts.Prune {
+		// Prune all title-matched discussions regardless of migration marker
 		if matches, ok := dstCtx.byTitle[title]; ok {
 			for _, d := range matches {
 				if err := gh.DeleteDiscussion(ctx, dst, d); err != nil {
