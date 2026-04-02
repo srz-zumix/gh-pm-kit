@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	pkgprojects "github.com/srz-zumix/gh-pm-kit/pkg/projects"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
+	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
 )
 
@@ -98,7 +99,7 @@ func NewMigrateCmd() *cobra.Command {
 					return fmt.Errorf("failed to migrate project #%d from '%s' to project #%d of '%s': %w",
 						srcNumber, srcRepo.Owner, dstNumber, dstRepo.Owner, migrateErr)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Migrated project: %s\n", p.URL)
+				logger.Info("Migrated project", "url", p.URL)
 			} else {
 				p, migrateErr := pkgprojects.MigrateProject(
 					ctx, srcClient, dstClient, srcRepo.Owner, dstRepo.Owner, srcNumber, migrateOpts,
@@ -107,7 +108,7 @@ func NewMigrateCmd() *cobra.Command {
 					return fmt.Errorf("failed to migrate project #%d from '%s' to '%s': %w",
 						srcNumber, srcRepo.Owner, dstRepo.Owner, migrateErr)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Migrated project: %s\n", p.URL)
+				logger.Info("Migrated project", "url", p.URL)
 			}
 			return nil
 		},
