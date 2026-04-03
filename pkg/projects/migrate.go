@@ -307,7 +307,9 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcOwne
 		if err != nil {
 			return results, err
 		}
-		results = append(results, item)
+		if item != nil {
+			results = append(results, item)
+		}
 	}
 	return results, nil
 }
