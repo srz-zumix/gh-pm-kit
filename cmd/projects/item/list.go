@@ -22,8 +22,8 @@ func NewListCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "list <number|URL>",
-		Short: "List item in a GitHub Project v2",
-		Long: "List item in a GitHub Project v2.\n\n" +
+		Short: "List items in a GitHub Project v2",
+		Long: "List items in a GitHub Project v2.\n\n" +
 			"The project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
