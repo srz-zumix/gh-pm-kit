@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	pkgprojects "github.com/srz-zumix/gh-pm-kit/pkg/projects"
+	"github.com/srz-zumix/gh-pm-kit/pkg/projects"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
@@ -85,7 +85,7 @@ func NewMigrateCmd() *cobra.Command {
 				return fmt.Errorf("failed to create GitHub clients: %w", err)
 			}
 
-			migrateOpts := &pkgprojects.MigrateOptions{
+			migrateOpts := &projects.MigrateOptions{
 				Overwrite: overwrite,
 				Prune:     prune,
 			}
@@ -100,7 +100,7 @@ func NewMigrateCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			if hasDstProject {
-				p, migrateErr := pkgprojects.MigrateProjectTo(
+				p, migrateErr := projects.MigrateProjectTo(
 					ctx, srcClient, dstClient, srcRepo.Owner, dstRepo.Owner, srcNumber, dstNumber, migrateOpts,
 				)
 				if migrateErr != nil {
@@ -109,7 +109,7 @@ func NewMigrateCmd() *cobra.Command {
 				}
 				logger.Info("Migrated project", "url", p.URL)
 			} else {
-				p, migrateErr := pkgprojects.MigrateProject(
+				p, migrateErr := projects.MigrateProject(
 					ctx, srcClient, dstClient, srcRepo.Owner, dstRepo.Owner, srcNumber, migrateOpts,
 				)
 				if migrateErr != nil {
