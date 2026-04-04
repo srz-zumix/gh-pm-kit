@@ -10,8 +10,8 @@ import (
 func NewItemCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "item",
-		Short: "Manage item in a GitHub Project v2",
-		Long:  `Manage item in a GitHub Project v2`,
+		Short: "Manage items in a GitHub Project v2",
+		Long:  `Manage items in a GitHub Project v2`,
 	}
 
 	cmd.AddCommand(item.NewListCmd())
