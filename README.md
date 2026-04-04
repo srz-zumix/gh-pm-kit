@@ -5,7 +5,7 @@ Project management extensions for the [GitHub CLI](https://cli.github.com/).
 ## Installation
 
 ```sh
-gh extension install srz-zumix/gh pm-kit
+gh extension install srz-zumix/gh-pm-kit
 ```
 
 ### Shell completion
