@@ -216,7 +216,7 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 			return &copyPrev, nil
 		}
 		// Overwrite: update the discussion body and rebuild comments in-place.
-		return overwriteDiscussion(ctx, src, srcRepo, dst, dstRepo, prev, srcDisc, dstCtx, opts)
+		return overwriteDiscussion(ctx, src, srcRepo, dst, dstRepo, prev, srcDisc, opts)
 	}
 
 	discBody, err := buildDiscBody(ctx, src, srcRepo, srcDisc, marker, opts)
@@ -255,7 +255,7 @@ func findDiscussionByMarker(all []gh.Discussion, marker string) *gh.Discussion {
 
 // overwriteDiscussion updates the body of prev in place, deletes all its existing comments,
 // and re-populates them from srcDisc. The discussion node itself is preserved.
-func overwriteDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstRepo repository.Repository, prev *gh.Discussion, srcDisc *gh.Discussion, dstCtx *dstMigrationContext, opts *MigrateOptions) (*gh.Discussion, error) {
+func overwriteDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repository.Repository, dst *gh.GitHubClient, dstRepo repository.Repository, prev *gh.Discussion, srcDisc *gh.Discussion, opts *MigrateOptions) (*gh.Discussion, error) {
 	marker := migratedFromMarker(srcRepo, int(srcDisc.Number))
 
 	discBody, err := buildDiscBody(ctx, src, srcRepo, srcDisc, marker, opts)
