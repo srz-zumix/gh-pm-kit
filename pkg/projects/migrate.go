@@ -194,8 +194,8 @@ func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstOwner strin
 	}, nil
 }
 
-// migrateableDataTypes are the field data types that can be migrated.
-var migrateableDataTypes = map[string]bool{
+// migratableDataTypes are the field data types that can be migrated.
+var migratableDataTypes = map[string]bool{
 	"TEXT":          true,
 	"NUMBER":        true,
 	"DATE":          true,
@@ -411,7 +411,7 @@ func warnSourceViews(ctx context.Context, src *gh.GitHubClient, srcOwner string,
 	}
 }
 
-// createProjectFields creates all migrateable custom fields from srcFields in the destination project.
+// createProjectFields creates all migratable custom fields from srcFields in the destination project.
 // Fields whose names already exist in the destination (built-in or previously created) are skipped.
 // Returns a map of field name to destination ProjectV2Field (including pre-existing ones).
 func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner string, dstProject *gh.ProjectV2, srcFields []gh.ProjectV2Field) (map[string]*gh.ProjectV2Field, error) {
@@ -428,7 +428,7 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 		dstFieldByName[f.Name] = f
 	}
 	for _, f := range srcFields {
-		if !migrateableDataTypes[f.DataType] {
+		if !migratableDataTypes[f.DataType] {
 			continue
 		}
 		if existingByName[f.Name] {
