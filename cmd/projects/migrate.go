@@ -19,6 +19,7 @@ func NewMigrateCmd() *cobra.Command {
 	var createIssue bool
 	var overwrite bool
 	var prune bool
+	var pruneItems bool
 
 	cmd := &cobra.Command{
 		Use:   "migrate <number|URL> [dst-number|dst-URL]",
@@ -86,8 +87,9 @@ func NewMigrateCmd() *cobra.Command {
 			}
 
 			migrateOpts := &projects.MigrateOptions{
-				Overwrite: overwrite,
-				Prune:     prune,
+				Overwrite:  overwrite,
+				Prune:      prune,
+				PruneItems: pruneItems,
 			}
 			if issueRepoFlag != "" {
 				issueRepo, err := parser.Repository(parser.RepositoryInput(issueRepoFlag))
@@ -101,7 +103,7 @@ func NewMigrateCmd() *cobra.Command {
 
 			if hasDstProject {
 				p, migrateErr := projects.MigrateProjectTo(
-					ctx, srcClient, dstClient, srcRepo.Owner, dstRepo.Owner, srcNumber, dstNumber, migrateOpts,
+					ctx, srcClient, dstClient, srcRepo.Host, srcRepo.Owner, dstRepo.Owner, srcNumber, dstNumber, migrateOpts,
 				)
 				if migrateErr != nil {
 					return fmt.Errorf("failed to migrate project #%d from '%s' to project #%d of '%s': %w",
@@ -110,7 +112,7 @@ func NewMigrateCmd() *cobra.Command {
 				logger.Info("Migrated project", "url", p.URL)
 			} else {
 				p, migrateErr := projects.MigrateProject(
-					ctx, srcClient, dstClient, srcRepo.Owner, dstRepo.Owner, srcNumber, migrateOpts,
+					ctx, srcClient, dstClient, srcRepo.Host, srcRepo.Owner, dstRepo.Owner, srcNumber, migrateOpts,
 				)
 				if migrateErr != nil {
 					return fmt.Errorf("failed to migrate project #%d from '%s' to '%s': %w",
@@ -128,7 +130,9 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
 	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
 	f.BoolVar(&overwrite, "overwrite", false, "Delete and re-create a previously migrated item when a migration marker is found; without this option, such items are skipped")
-	f.BoolVar(&prune, "prune", false, "Delete ALL previously migrated projects and items from the destination before migrating (destructive; overrides --overwrite)")
+	f.BoolVar(&prune, "prune", false, "Delete ALL destination projects matching by migration marker or by title before creating a new one; only effective when no destination project is given (destructive)")
+	f.BoolVar(&pruneItems, "prune-items", false, "Delete previously migrated items (carrying the hidden migration marker) from the destination project before migrating (destructive; overrides --overwrite; applies in all modes)")
 	_ = f.MarkHidden("prune")
+	_ = f.MarkHidden("prune-items")
 	return cmd
 }

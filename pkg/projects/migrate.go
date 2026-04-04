@@ -17,11 +17,17 @@ type MigrateOptions struct {
 	// Overwrite deletes the previously-migrated item (identified by migration marker)
 	// and recreates it. Without this option, already-migrated items are skipped.
 	Overwrite bool
-	// Prune deletes ALL destination projects that carry the source-project migration marker,
-	// as well as any destination project whose title matches the source project title,
-	// before migrating. This is a highly destructive operation: entire projects (not just
-	// individual items) are removed. It overrides Overwrite.
+	// Prune deletes ALL destination projects that carry the source-project migration
+	// marker, as well as any destination project whose title matches the source project
+	// title, before creating a new destination project. Only meaningful in MigrateProject
+	// (i.e. when no explicit destination project is given); ignored in MigrateProjectTo and
+	// MigrateProjectItems where the destination project is fixed. This is a highly
+	// destructive operation: entire projects are removed.
 	Prune bool
+	// PruneItems deletes all destination project items that carry the source-project migration
+	// marker before migrating. Applies in all migration modes (MigrateProject,
+	// MigrateProjectTo, MigrateProjectItems). This is destructive and overrides Overwrite.
+	PruneItems bool
 	// IssueRepo, if set, searches for an existing issue with the migration marker in this
 	// repository and links it to the project. If no matching issue is found and CreateIssue
 	// is true, a new issue is created instead. If CreateIssue is false, falls back to draft issue.
@@ -32,9 +38,10 @@ type MigrateOptions struct {
 }
 
 // migratedItemMarker returns the HTML comment marker embedded in migrated draft-issue bodies.
-// The source project is SHA-256-hashed to avoid leaking owner/number information.
-func migratedItemMarker(srcOwner string, srcProjectNumber int, srcItemID string) string {
-	projectKey := fmt.Sprintf("%s#%d", srcOwner, srcProjectNumber)
+// The source project identity (host, owner, number) is SHA-256-hashed to avoid leaking it
+// and to prevent cross-host collisions when the same owner/number exists on multiple hosts.
+func migratedItemMarker(srcHost, srcOwner string, srcProjectNumber int, srcItemID string) string {
+	projectKey := fmt.Sprintf("%s:%s#%d", srcHost, srcOwner, srcProjectNumber)
 	projectHash := fmt.Sprintf("%x", sha256.Sum256([]byte(projectKey)))[:16]
 	itemHash := fmt.Sprintf("%x", sha256.Sum256([]byte(srcItemID)))[:16]
 	return fmt.Sprintf("<!-- gh-pm-kit:migrated-project-item:%s/%s -->", projectHash, itemHash)
@@ -46,16 +53,16 @@ func isMigratedItem(body, marker string) bool {
 }
 
 // projectMarkerPrefix returns the prefix shared by all items migrated from the same source project.
-func projectMarkerPrefix(srcOwner string, srcProjectNumber int) string {
-	projectKey := fmt.Sprintf("%s#%d", srcOwner, srcProjectNumber)
+func projectMarkerPrefix(srcHost, srcOwner string, srcProjectNumber int) string {
+	projectKey := fmt.Sprintf("%s:%s#%d", srcHost, srcOwner, srcProjectNumber)
 	projectHash := fmt.Sprintf("%x", sha256.Sum256([]byte(projectKey)))[:16]
 	return fmt.Sprintf("<!-- gh-pm-kit:migrated-project-item:%s/", projectHash)
 }
 
 // migratedProjectMarker returns the HTML comment marker embedded in migrated project readmes
 // to identify the migration source, enabling idempotent re-runs.
-func migratedProjectMarker(srcOwner string, srcProjectNumber int) string {
-	projectKey := fmt.Sprintf("%s#%d", srcOwner, srcProjectNumber)
+func migratedProjectMarker(srcHost, srcOwner string, srcProjectNumber int) string {
+	projectKey := fmt.Sprintf("%s:%s#%d", srcHost, srcOwner, srcProjectNumber)
 	projectHash := fmt.Sprintf("%x", sha256.Sum256([]byte(projectKey)))[:16]
 	return fmt.Sprintf("<!-- gh-pm-kit:migrated-project:%s -->", projectHash)
 }
@@ -95,7 +102,6 @@ func embedMarker(s, marker string) string {
 // dstProjectContext holds pre-fetched destination project state shared across multiple item migrations.
 type dstProjectContext struct {
 	projectID string
-	fields    []gh.ProjectV2Field
 	// fieldByName maps destination field name to field for quick lookup.
 	fieldByName map[string]*gh.ProjectV2Field
 	// items holds all existing draft-issue items in the destination project.
@@ -117,8 +123,8 @@ func (c *dstProjectContext) removeItem(itemID string) {
 // given source project, identified by the project marker prefix. Item values are collected
 // before any deletion to avoid iterator invalidation, and dstCtx.items is rebuilt
 // afterwards. Must be called at most once per migration run, before the items loop.
-func pruneProjectItems(ctx context.Context, dst *gh.GitHubClient, srcOwner string, srcProjectNumber int, dstCtx *dstProjectContext) error {
-	prefix := projectMarkerPrefix(srcOwner, srcProjectNumber)
+func pruneProjectItems(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, dstCtx *dstProjectContext) error {
+	prefix := projectMarkerPrefix(srcHost, srcOwner, srcProjectNumber)
 	// Collect matching items first to avoid mutating the slice during iteration.
 	var toDelete []gh.ProjectV2Item
 	for _, item := range dstCtx.items {
@@ -183,7 +189,6 @@ func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstOwner strin
 	}
 	return &dstProjectContext{
 		projectID:   string(project.ID),
-		fields:      fields,
 		fieldByName: fieldByName,
 		items:       items,
 	}, nil
@@ -201,7 +206,7 @@ var migrateableDataTypes = map[string]bool{
 // MigrateProject migrates a ProjectV2 from srcOwner to dstOwner.
 // It creates the destination project, copies custom fields, then migrates items as draft issues.
 // A migration marker is embedded in the project readme to enable idempotent re-runs.
-func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, projectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
+func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, projectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcOwner, projectNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source project #%d for '%s': %w", projectNumber, srcOwner, err)
@@ -215,7 +220,7 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, ds
 		return nil, fmt.Errorf("failed to list items for source project #%d of '%s': %w", projectNumber, srcOwner, err)
 	}
 
-	projectMarker := migratedProjectMarker(srcOwner, projectNumber)
+	projectMarker := migratedProjectMarker(srcHost, srcOwner, projectNumber)
 	dstProjects, err := gh.ListProjectsV2(ctx, dst, dstOwner)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list destination projects for '%s': %w", dstOwner, err)
@@ -249,7 +254,7 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, ds
 			return prev, nil
 		}
 		// Overwrite: update the existing destination project in-place.
-		return overwriteProject(ctx, src, dst, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
+		return overwriteProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
 	}
 
 	dstOwnerID, err := gh.GetOwnerNodeID(ctx, dst, dstOwner)
@@ -272,13 +277,13 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, ds
 		projectID:   string(dstProject.ID),
 		fieldByName: dstFieldByName,
 	}
-	if opts != nil && opts.Prune {
-		if err := pruneProjectItems(ctx, dst, srcOwner, projectNumber, dstCtx); err != nil {
+	if opts != nil && opts.PruneItems {
+		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, projectNumber, dstCtx); err != nil {
 			return dstProject, err
 		}
 	}
 	for i := range srcItems {
-		if _, err := migrateItem(ctx, dst, srcOwner, projectNumber, &srcItems[i], dstCtx, opts); err != nil {
+		if _, err := migrateItem(ctx, dst, srcHost, srcOwner, projectNumber, &srcItems[i], dstCtx, opts); err != nil {
 			return dstProject, err
 		}
 	}
@@ -287,7 +292,7 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, ds
 
 // overwriteProject updates an existing destination project in-place:
 // refreshes metadata, creates any new fields, and re-migrates items.
-func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
+func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	if err := updateProjectMetadata(ctx, dst, prev, srcProject, marker); err != nil {
 		return prev, err
 	}
@@ -301,13 +306,13 @@ func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, 
 	}
 	warnSourceViews(ctx, src, srcOwner, srcProject.Number)
 	dstCtx.fieldByName = dstFieldByName
-	if opts != nil && opts.Prune {
-		if err := pruneProjectItems(ctx, dst, srcOwner, srcProject.Number, dstCtx); err != nil {
+	if opts != nil && opts.PruneItems {
+		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, srcProject.Number, dstCtx); err != nil {
 			return prev, err
 		}
 	}
 	for i := range srcItems {
-		if _, err := migrateItem(ctx, dst, srcOwner, srcProject.Number, &srcItems[i], dstCtx, opts); err != nil {
+		if _, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProject.Number, &srcItems[i], dstCtx, opts); err != nil {
 			return prev, err
 		}
 	}
@@ -317,7 +322,7 @@ func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, 
 // MigrateProjectTo migrates a source project into a specific existing destination project,
 // always overwriting it regardless of --overwrite flag.
 // Metadata, custom fields, and items are merged into the given destination project.
-func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
+func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcOwner, srcProjectNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source project #%d for '%s': %w", srcProjectNumber, srcOwner, err)
@@ -334,13 +339,13 @@ func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get destination project #%d for '%s': %w", dstProjectNumber, dstOwner, err)
 	}
-	marker := migratedProjectMarker(srcOwner, srcProjectNumber)
-	return overwriteProject(ctx, src, dst, srcOwner, dstOwner, srcProject, srcFields, srcItems, dstProject, marker, opts)
+	marker := migratedProjectMarker(srcHost, srcOwner, srcProjectNumber)
+	return overwriteProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, dstProject, marker, opts)
 }
 
 // MigrateProjectItems migrates only the items of an existing source project into an existing
 // destination project. Both projects must already exist and fields must be set up in the destination.
-func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) ([]*gh.ProjectV2Item, error) {
+func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) ([]*gh.ProjectV2Item, error) {
 	srcItems, err := gh.ListProjectV2Items(ctx, src, srcOwner, srcProjectNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list items for source project #%d of '%s': %w", srcProjectNumber, srcOwner, err)
@@ -349,14 +354,14 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcOwne
 	if err != nil {
 		return nil, err
 	}
-	if opts != nil && opts.Prune {
-		if err := pruneProjectItems(ctx, dst, srcOwner, srcProjectNumber, dstCtx); err != nil {
+	if opts != nil && opts.PruneItems {
+		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, srcProjectNumber, dstCtx); err != nil {
 			return nil, err
 		}
 	}
 	var results []*gh.ProjectV2Item
 	for i := range srcItems {
-		item, err := migrateItem(ctx, dst, srcOwner, srcProjectNumber, &srcItems[i], dstCtx, opts)
+		item, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProjectNumber, &srcItems[i], dstCtx, opts)
 		if err != nil {
 			return results, err
 		}
@@ -461,12 +466,12 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 // When opts.IssueRepo is set, it first searches for an existing issue with the migration
 // marker in that repository and links it. If no issue is found and opts.CreateIssue is true,
 // a new issue is created. Otherwise the item falls back to a draft issue.
-func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcOwner string, srcProjectNumber int, srcItem *gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) (*gh.ProjectV2Item, error) {
+func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, srcItem *gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) (*gh.ProjectV2Item, error) {
 	if srcItem.Content.Type == gh.ProjectV2ItemTypeRedacted {
 		logger.Info("skipping redacted item", "itemID", srcItem.ID)
 		return nil, nil
 	}
-	marker := migratedItemMarker(srcOwner, srcProjectNumber, srcItem.ID)
+	marker := migratedItemMarker(srcHost, srcOwner, srcProjectNumber, srcItem.ID)
 	if prev := findItemByMarker(dstCtx.items, marker); prev != nil {
 		if opts == nil || !opts.Overwrite {
 			logger.Info("skipping already-migrated item", "title", prev.Content.Title, "itemID", prev.ID)
