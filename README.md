@@ -5,13 +5,16 @@ Project management extensions for the [GitHub CLI](https://cli.github.com/).
 ## Installation
 
 ```sh
-gh extension install srz-zumix/gh pm-kit
+gh extension install srz-zumix/gh-pm-kit
 ```
 
-### Shell completion
+## Shell Completion
 
-`gh pm-kit` supports shell completion via the `completion` subcommand.
-Run `gh pm-kit completion --help` for details on how to configure it for your shell.
+**Workaround Available!** While gh CLI doesn't natively support extension completion, we provide a patch script that enables it.
+
+**Prerequisites:** Before setting up gh-pm-kit completion, ensure gh CLI completion is configured for your shell. See [gh completion documentation](https://cli.github.com/manual/gh_completion) for setup instructions.
+
+For detailed installation instructions and setup for each shell, see the [Shell Completion Guide](https://github.com/srz-zumix/go-gh-extension/blob/main/docs/shell-completion.md).
 
 ## Usage
 
