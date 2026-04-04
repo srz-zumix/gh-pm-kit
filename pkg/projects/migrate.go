@@ -113,6 +113,42 @@ func (c *dstProjectContext) removeItem(itemID string) {
 	}
 }
 
+// pruneProjectItems deletes all items in dstCtx that carry any migration marker from the
+// given source project, identified by the project marker prefix. Item values are collected
+// before any deletion to avoid iterator invalidation, and dstCtx.items is rebuilt
+// afterwards. Must be called at most once per migration run, before the items loop.
+func pruneProjectItems(ctx context.Context, dst *gh.GitHubClient, srcOwner string, srcProjectNumber int, dstCtx *dstProjectContext) error {
+	prefix := projectMarkerPrefix(srcOwner, srcProjectNumber)
+	// Collect matching items first to avoid mutating the slice during iteration.
+	var toDelete []gh.ProjectV2Item
+	for _, item := range dstCtx.items {
+		if (item.Content.Type == gh.ProjectV2ItemTypeDraftIssue || item.Content.Type == gh.ProjectV2ItemTypeIssue) &&
+			strings.Contains(item.Content.Body, prefix) {
+			toDelete = append(toDelete, item)
+		}
+	}
+	if len(toDelete) == 0 {
+		return nil
+	}
+	deleted := make(map[string]bool, len(toDelete))
+	for _, item := range toDelete {
+		if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, item.ID); err != nil {
+			return fmt.Errorf("failed to delete item '%s' during prune: %w", item.Content.Title, err)
+		}
+		deleted[item.ID] = true
+		logger.Info("pruned migrated item", "title", item.Content.Title, "itemID", item.ID)
+	}
+	// Rebuild the items cache excluding deleted entries.
+	remaining := make([]gh.ProjectV2Item, 0, len(dstCtx.items)-len(toDelete))
+	for _, item := range dstCtx.items {
+		if !deleted[item.ID] {
+			remaining = append(remaining, item)
+		}
+	}
+	dstCtx.items = remaining
+	return nil
+}
+
 // findItemByMarker returns a pointer to the first draft-issue or issue item whose body
 // contains marker, or nil if none is found.
 func findItemByMarker(items []gh.ProjectV2Item, marker string) *gh.ProjectV2Item {
@@ -236,6 +272,11 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, ds
 		projectID:   string(dstProject.ID),
 		fieldByName: dstFieldByName,
 	}
+	if opts != nil && opts.Prune {
+		if err := pruneProjectItems(ctx, dst, srcOwner, projectNumber, dstCtx); err != nil {
+			return dstProject, err
+		}
+	}
 	for i := range srcItems {
 		if _, err := migrateItem(ctx, dst, srcOwner, projectNumber, &srcItems[i], dstCtx, opts); err != nil {
 			return dstProject, err
@@ -260,6 +301,11 @@ func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, 
 	}
 	warnSourceViews(ctx, src, srcOwner, srcProject.Number)
 	dstCtx.fieldByName = dstFieldByName
+	if opts != nil && opts.Prune {
+		if err := pruneProjectItems(ctx, dst, srcOwner, srcProject.Number, dstCtx); err != nil {
+			return prev, err
+		}
+	}
 	for i := range srcItems {
 		if _, err := migrateItem(ctx, dst, srcOwner, srcProject.Number, &srcItems[i], dstCtx, opts); err != nil {
 			return prev, err
@@ -302,6 +348,11 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcOwne
 	dstCtx, err := prepareDstContext(ctx, dst, dstOwner, dstProjectNumber)
 	if err != nil {
 		return nil, err
+	}
+	if opts != nil && opts.Prune {
+		if err := pruneProjectItems(ctx, dst, srcOwner, srcProjectNumber, dstCtx); err != nil {
+			return nil, err
+		}
 	}
 	var results []*gh.ProjectV2Item
 	for i := range srcItems {
@@ -416,18 +467,7 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcOwner string, src
 		return nil, nil
 	}
 	marker := migratedItemMarker(srcOwner, srcProjectNumber, srcItem.ID)
-	prefix := projectMarkerPrefix(srcOwner, srcProjectNumber)
-	if opts != nil && opts.Prune {
-		for _, existing := range dstCtx.items {
-			if (existing.Content.Type == gh.ProjectV2ItemTypeDraftIssue || existing.Content.Type == gh.ProjectV2ItemTypeIssue) &&
-				strings.Contains(existing.Content.Body, prefix) {
-				if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, existing.ID); err != nil {
-					return nil, fmt.Errorf("failed to delete item '%s' during prune: %w", existing.Content.Title, err)
-				}
-				dstCtx.removeItem(existing.ID)
-			}
-		}
-	} else if prev := findItemByMarker(dstCtx.items, marker); prev != nil {
+	if prev := findItemByMarker(dstCtx.items, marker); prev != nil {
 		if opts == nil || !opts.Overwrite {
 			logger.Info("skipping already-migrated item", "title", prev.Content.Title, "itemID", prev.ID)
 			return prev, nil
