@@ -35,10 +35,10 @@ func NewMigrateCmd() *cobra.Command {
 			"The source project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"If a destination project number or URL is given as the second argument,\n" +
-			"that project is always overwritten. Without a destination project,\n" +
-			"a new project is created (unless --overwrite is given).\n\n" +
-			"Items already migrated are identified by a hidden marker and skipped\n" +
-			"unless --overwrite is specified.\n\n" +
+			"that project is used as the migration target. Without a destination project,\n" +
+			"a new destination project is created when needed.\n\n" +
+			"Items already migrated are identified by a hidden marker and skipped by default.\n" +
+			"Use --overwrite to delete and re-create matching migrated items.\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
