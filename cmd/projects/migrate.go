@@ -63,8 +63,11 @@ func NewMigrateCmd() *cobra.Command {
 					return fmt.Errorf("invalid destination project number or URL %q: %w", args[1], err)
 				}
 				if projectURL, _ := parser.ParseProjectURL(args[1]); projectURL != nil {
+					urlDstOwner := projectURL.Host + "/" + projectURL.Owner
 					if dstOwnerFlag == "" {
-						dstOwnerFlag = projectURL.Host + "/" + projectURL.Owner
+						dstOwnerFlag = urlDstOwner
+					} else if dstOwnerFlag != urlDstOwner {
+						return fmt.Errorf("destination owner mismatch: --dst %q does not match destination project URL owner %q", dstOwnerFlag, urlDstOwner)
 					}
 				}
 			}
