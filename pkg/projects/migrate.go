@@ -399,7 +399,7 @@ func updateProjectMetadata(ctx context.Context, dst *gh.GitHubClient, dstProject
 func warnSourceViews(ctx context.Context, src *gh.GitHubClient, srcOwner string, projectNumber int) {
 	views, err := gh.ListProjectV2Views(ctx, src, srcOwner, projectNumber)
 	if err != nil {
-		logger.Warn("failed to list source project views", "err", err)
+		logger.Warn("failed to list source project views", "error", err)
 		return
 	}
 	if len(views) == 0 {
