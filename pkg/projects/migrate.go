@@ -17,8 +17,10 @@ type MigrateOptions struct {
 	// Overwrite deletes the previously-migrated item (identified by migration marker)
 	// and recreates it. Without this option, already-migrated items are skipped.
 	Overwrite bool
-	// Prune deletes ALL draft-issue items that carry the source-project migration marker
-	// before migrating. This is a destructive operation and overrides Overwrite.
+	// Prune deletes ALL destination projects that carry the source-project migration marker,
+	// as well as any destination project whose title matches the source project title,
+	// before migrating. This is a highly destructive operation: entire projects (not just
+	// individual items) are removed. It overrides Overwrite.
 	Prune bool
 	// IssueRepo, if set, searches for an existing issue with the migration marker in this
 	// repository and links it to the project. If no matching issue is found and CreateIssue

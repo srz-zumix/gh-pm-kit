@@ -24,8 +24,13 @@ func NewMigrateCmd() *cobra.Command {
 		Use:   "migrate <number|URL> [dst-number|dst-URL]",
 		Short: "Migrate a GitHub Project v2 to another owner",
 		Long: "Migrate a GitHub Project v2 (New Projects) from one owner to another.\n" +
-			"The source project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT),\n" +
-			"and items (migrated as draft issues) are copied to the destination owner.\n\n" +
+			"The source project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT,\n" +
+			"ITERATION), and items are copied to the destination owner.\n\n" +
+			"Items are migrated as draft issues by default. If --repo is specified, the\n" +
+			"migration first searches for an existing issue in that repository that carries\n" +
+			"the migration marker and links it to the project. If no matching issue is found\n" +
+			"and --create-issue is set, a new issue is created; otherwise a draft issue is\n" +
+			"used as a fallback.\n\n" +
 			"The source project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"If a destination project number or URL is given as the second argument,\n" +
