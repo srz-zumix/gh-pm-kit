@@ -255,7 +255,7 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 			return prev, nil
 		}
 		// Overwrite or item-prune: update the existing destination project in-place.
-		return overwriteProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
+		return migrateIntoProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
 	}
 
 	dstOwnerID, err := gh.GetOwnerNodeID(ctx, dst, dstOwner)
@@ -291,9 +291,10 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 	return dstProject, nil
 }
 
-// overwriteProject updates an existing destination project in-place:
-// refreshes metadata, creates any new fields, and re-migrates items.
-func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
+// migrateIntoProject migrates source project contents into an existing destination project
+// in-place: refreshes metadata, creates any missing fields, and migrates items according to opts.
+// Item-level idempotency (skip / overwrite / prune) is governed by opts as in any other migration mode.
+func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	if err := updateProjectMetadata(ctx, dst, prev, srcProject, marker); err != nil {
 		return prev, err
 	}
@@ -320,9 +321,9 @@ func overwriteProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, s
 	return prev, nil
 }
 
-// MigrateProjectTo migrates a source project into a specific existing destination project,
-// always overwriting it regardless of --overwrite flag.
-// Metadata, custom fields, and items are merged into the given destination project.
+// MigrateProjectTo migrates a source project into a specific existing destination project.
+// Metadata and missing custom fields are always applied; item-level behaviour (skip already-migrated
+// items, overwrite, or prune) is controlled by opts the same way as in MigrateProject.
 func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcOwner, srcProjectNumber)
 	if err != nil {
@@ -341,7 +342,7 @@ func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcHost, s
 		return nil, fmt.Errorf("failed to get destination project #%d for '%s': %w", dstProjectNumber, dstOwner, err)
 	}
 	marker := migratedProjectMarker(srcHost, srcOwner, srcProjectNumber)
-	return overwriteProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, dstProject, marker, opts)
+	return migrateIntoProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, dstProject, marker, opts)
 }
 
 // MigrateProjectItems migrates only the items of an existing source project into an existing
