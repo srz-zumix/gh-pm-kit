@@ -1,22 +1,22 @@
-# gh-pm-kit
+# gh pm-kit
 
 Project management extensions for the [GitHub CLI](https://cli.github.com/).
 
 ## Installation
 
 ```sh
-gh extension install srz-zumix/gh-pm-kit
+gh extension install srz-zumix/gh pm-kit
 ```
 
 ### Shell completion
 
-`gh-pm-kit` supports shell completion via the `completion` subcommand.
-Run `gh-pm-kit completion --help` for details on how to configure it for your shell.
+`gh pm-kit` supports shell completion via the `completion` subcommand.
+Run `gh pm-kit completion --help` for details on how to configure it for your shell.
 
 ## Usage
 
 ```sh
-gh-pm-kit [command] [flags]
+gh pm-kit [command] [flags]
 ```
 
 Global flags available on all commands:
@@ -35,7 +35,7 @@ Global flags available on all commands:
 List discussions in a repository.
 
 ```sh
-gh-pm-kit discussions list [flags]
+gh pm-kit discussions list [flags]
 ```
 
 | Flag | Default | Description |
@@ -53,7 +53,7 @@ When `--number` is specified, only that discussion is migrated.
 When `--number` is omitted, all discussions are migrated.
 
 ```sh
-gh-pm-kit discussions migrate --dst OWNER/REPO [flags]
+gh pm-kit discussions migrate --dst OWNER/REPO [flags]
 ```
 
 | Flag | Default | Description |
@@ -76,7 +76,7 @@ Search discussions in a repository using a search query.
 The query can include label filters and other search criteria.
 
 ```sh
-gh-pm-kit discussions search [query...] [flags]
+gh pm-kit discussions search [query...] [flags]
 ```
 
 | Flag | Default | Description |
@@ -98,7 +98,7 @@ gh-pm-kit discussions search [query...] [flags]
 List GitHub Projects v2 for an owner.
 
 ```sh
-gh-pm-kit projects list [flags]
+gh pm-kit projects list [flags]
 ```
 
 | Flag | Default | Description |
@@ -114,7 +114,7 @@ List items in a GitHub Project v2.
 The project can be specified by its number or by its URL (e.g. `https://github.com/orgs/my-org/projects/1`).
 
 ```sh
-gh-pm-kit projects item list <number|URL> [flags]
+gh pm-kit projects item list <number|URL> [flags]
 ```
 
 | Flag | Default | Description |
@@ -141,7 +141,7 @@ Without a destination project, a new destination project is created when needed.
 Items already migrated are identified by a hidden marker and skipped by default.
 
 ```sh
-gh-pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
+gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
 ```
 
 | Flag | Default | Description |
