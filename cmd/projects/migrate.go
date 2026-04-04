@@ -1,0 +1,138 @@
+// Package projects provides CLI commands for GitHub Projects v2 management.
+package projects
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+	"github.com/srz-zumix/gh-pm-kit/pkg/projects"
+	"github.com/srz-zumix/go-gh-extension/pkg/gh"
+	"github.com/srz-zumix/go-gh-extension/pkg/logger"
+	"github.com/srz-zumix/go-gh-extension/pkg/parser"
+)
+
+// NewMigrateCmd creates the projects migrate command.
+func NewMigrateCmd() *cobra.Command {
+	var srcOwnerFlag string
+	var dstOwnerFlag string
+	var issueRepoFlag string
+	var createIssue bool
+	var overwrite bool
+	var prune bool
+	var pruneItems bool
+
+	cmd := &cobra.Command{
+		Use:   "migrate <number|URL> [dst-number|dst-URL]",
+		Short: "Migrate a GitHub Project v2 to another owner",
+		Long: "Migrate a GitHub Project v2 (New Projects) from one owner to another.\n" +
+			"The source project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT,\n" +
+			"ITERATION), and items are copied to the destination owner.\n\n" +
+			"Items are migrated as draft issues by default. If --repo is specified, the\n" +
+			"migration first searches for an existing issue in that repository that carries\n" +
+			"the migration marker and links it to the project. If no matching issue is found\n" +
+			"and --create-issue is set, a new issue is created; otherwise a draft issue is\n" +
+			"used as a fallback.\n\n" +
+			"The source project can be specified by its number or by its URL\n" +
+			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
+			"If a destination project number or URL is given as the second argument,\n" +
+			"that project is used as the migration target. Without a destination project,\n" +
+			"a new destination project is created when needed.\n\n" +
+			"Items already migrated are identified by a hidden marker and skipped by default.\n" +
+			"Use --overwrite to delete and re-create matching migrated items.\n\n" +
+			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			srcNumber, err := parser.GetProjectNumberFromString(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid source project number or URL %q: %w", args[0], err)
+			}
+			srcOwner := srcOwnerFlag
+			if projectURL, _ := parser.ParseProjectURL(args[0]); projectURL != nil {
+				srcOwner = projectURL.Host + "/" + projectURL.Owner
+			}
+			srcRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(srcOwner))
+			if err != nil {
+				return fmt.Errorf("failed to resolve source owner: %w", err)
+			}
+
+			// Parse optional destination project argument.
+			var dstNumber int
+			hasDstProject := len(args) == 2
+			if hasDstProject {
+				dstNumber, err = parser.GetProjectNumberFromString(args[1])
+				if err != nil {
+					return fmt.Errorf("invalid destination project number or URL %q: %w", args[1], err)
+				}
+				if projectURL, _ := parser.ParseProjectURL(args[1]); projectURL != nil {
+					urlDstOwner := projectURL.Host + "/" + projectURL.Owner
+					if dstOwnerFlag == "" {
+						dstOwnerFlag = urlDstOwner
+					} else if dstOwnerFlag != urlDstOwner {
+						return fmt.Errorf("destination owner mismatch: --dst %q does not match destination project URL owner %q", dstOwnerFlag, urlDstOwner)
+					}
+				}
+			}
+
+			if dstOwnerFlag == "" {
+				return fmt.Errorf("destination owner is required: use --dst or provide a destination project URL")
+			}
+			dstRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(dstOwnerFlag))
+			if err != nil {
+				return fmt.Errorf("failed to resolve destination owner: %w", err)
+			}
+
+			srcClient, dstClient, err := gh.NewGitHubClientWith2Repos(srcRepo, dstRepo)
+			if err != nil {
+				return fmt.Errorf("failed to create GitHub clients: %w", err)
+			}
+
+			migrateOpts := &projects.MigrateOptions{
+				Overwrite:  overwrite,
+				Prune:      prune,
+				PruneItems: pruneItems,
+			}
+			if issueRepoFlag != "" {
+				issueRepo, err := parser.Repository(parser.RepositoryInput(issueRepoFlag))
+				if err != nil {
+					return fmt.Errorf("invalid --repo value %q: %w", issueRepoFlag, err)
+				}
+				migrateOpts.IssueRepo = &issueRepo
+				migrateOpts.CreateIssue = createIssue
+			}
+			ctx := cmd.Context()
+
+			if hasDstProject {
+				p, migrateErr := projects.MigrateProjectTo(
+					ctx, srcClient, dstClient, srcRepo.Host, srcRepo.Owner, dstRepo.Owner, srcNumber, dstNumber, migrateOpts,
+				)
+				if migrateErr != nil {
+					return fmt.Errorf("failed to migrate project #%d from '%s' to project #%d of '%s': %w",
+						srcNumber, srcRepo.Owner, dstNumber, dstRepo.Owner, migrateErr)
+				}
+				logger.Info("Migrated project", "url", p.URL)
+			} else {
+				p, migrateErr := projects.MigrateProject(
+					ctx, srcClient, dstClient, srcRepo.Host, srcRepo.Owner, dstRepo.Owner, srcNumber, migrateOpts,
+				)
+				if migrateErr != nil {
+					return fmt.Errorf("failed to migrate project #%d from '%s' to '%s': %w",
+						srcNumber, srcRepo.Owner, dstRepo.Owner, migrateErr)
+				}
+				logger.Info("Migrated project", "url", p.URL)
+			}
+			return nil
+		},
+	}
+
+	f := cmd.Flags()
+	f.StringVarP(&srcOwnerFlag, "src", "s", "", "Source owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
+	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required unless a destination URL is given as the second argument)")
+	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
+	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
+	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; for migrated items, delete and re-create them instead of skipping them")
+	f.BoolVar(&prune, "prune", false, "Delete ALL destination projects matching by migration marker or by title before creating a new one; only effective when no destination project is given (destructive)")
+	f.BoolVar(&pruneItems, "prune-items", false, "Delete previously migrated items (carrying the hidden migration marker) from the destination project before migrating (destructive; overrides --overwrite; applies in all modes)")
+	_ = f.MarkHidden("prune")
+	_ = f.MarkHidden("prune-items")
+	return cmd
+}
