@@ -129,7 +129,7 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required unless a destination URL is given as the second argument)")
 	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
 	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
-	f.BoolVar(&overwrite, "overwrite", false, "Delete and re-create a previously migrated item when a migration marker is found; without this option, such items are skipped")
+	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; for migrated items, delete and re-create them instead of skipping them")
 	f.BoolVar(&prune, "prune", false, "Delete ALL destination projects matching by migration marker or by title before creating a new one; only effective when no destination project is given (destructive)")
 	f.BoolVar(&pruneItems, "prune-items", false, "Delete previously migrated items (carrying the hidden migration marker) from the destination project before migrating (destructive; overrides --overwrite; applies in all modes)")
 	_ = f.MarkHidden("prune")
