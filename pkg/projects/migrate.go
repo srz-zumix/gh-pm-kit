@@ -249,11 +249,12 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 			}
 		}
 	} else if prev := findProjectByMarker(dstProjects, projectMarker); prev != nil {
-		if opts == nil || !opts.Overwrite {
+		// Continue with overwriteProject when either full overwrite or item pruning is requested.
+		if opts == nil || (!opts.Overwrite && !opts.PruneItems) {
 			logger.Info("skipping already-migrated project", "title", prev.Title, "projectID", prev.ID)
 			return prev, nil
 		}
-		// Overwrite: update the existing destination project in-place.
+		// Overwrite or item-prune: update the existing destination project in-place.
 		return overwriteProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
 	}
 
