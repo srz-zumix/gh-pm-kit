@@ -154,3 +154,91 @@ gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
 | `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; items are linked to matching issues (by migration marker) in this repository |
 | `--create-issue` | `false` | When `--repo` is set and no matching issue is found, create a new issue instead of a draft issue |
 | `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; for migrated items, delete and re-create them instead of skipping them |
+
+---
+
+## projects v1
+
+### projects v1 list
+
+List GitHub Projects (classic) for an owner or repository.
+If `--repo` is specified, repository projects are listed.
+If `--owner` is specified, projects for that organization or user are listed.
+If neither is specified, the current repository's owner projects are listed.
+
+```sh
+gh pm-kit projects v1 list [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Source owner in the format `[HOST/]OWNER` |
+| `-R, --repo string` | | Repository in the format `[HOST/]OWNER/REPO`; lists repository-scoped classic projects |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+### projects v1 columns list
+
+List columns of a GitHub Project (classic).
+The project can be specified by its number or by its URL
+(e.g. `https://github.com/orgs/my-org/projects/1` or `https://github.com/owner/repo/projects/1`).
+When a repository-scoped project URL is provided, the `--owner` and `--repo` flags are inferred automatically.
+
+```sh
+gh pm-kit projects v1 columns list <number|URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `-R, --repo string` | | Repository in the format `[HOST/]OWNER/REPO`; for repository-scoped projects |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+### projects v1 cards list
+
+List cards in a GitHub Project (classic) column.
+Accepts two forms:
+
+- `list <column-id>` — list by numeric column ID (obtained from `projects v1 columns list`)
+- `list <project-url|number> <column-name>` — list by project URL (or number) and column name (case-insensitive)
+
+When a repository-scoped project URL is provided, the `--owner` and `--repo` flags are inferred automatically.
+
+```sh
+gh pm-kit projects v1 cards list <column-id> [flags]
+gh pm-kit projects v1 cards list <project-url|number> <column-name> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER`; used with the two-argument form |
+| `-R, --repo string` | | Repository in the format `[HOST/]OWNER/REPO`; for repository-scoped projects |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+### projects v1 migrate
+
+Migrate a GitHub Project (classic) to a new GitHub Projects v2 project.
+The source classic project is specified by its number or URL.
+Both org-level (`https://github.com/orgs/my-org/projects/1`) and repository-scoped
+(`https://github.com/owner/repo/projects/1`) project URLs are supported.
+
+A new Projects v2 project is created under the destination owner.
+Each column becomes an option in a `Column` single-select field,
+and each card is migrated as a draft issue with the `Column` field set.
+Already-migrated items are identified by a hidden marker and skipped unless `--overwrite` is specified.
+
+```sh
+gh pm-kit projects v1 migrate <number|URL> --dst OWNER [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Source owner in the format `[HOST/]OWNER`; inferred from URL if a project URL is given |
+| `-R, --repo string` | | Source repository in the format `[HOST/]OWNER/REPO`; for repository-scoped classic projects; inferred from URL if a repo-scoped project URL is given |
+| `-d, --dst string` | **(required)** | Destination owner in the format `[HOST/]OWNER` |
+| `--overwrite` | `false` | Re-migrate already-migrated items instead of skipping them |

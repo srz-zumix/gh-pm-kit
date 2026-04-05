@@ -35,7 +35,7 @@ func NewListCmd() *cobra.Command {
 			}
 			owner := ownerFlag
 			if projectURL, _ := parser.ParseProjectURL(args[0]); projectURL != nil {
-				owner = projectURL.Host + "/" + projectURL.Owner
+				owner = projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 			}
 			repo, err := parser.Repository(parser.RepositoryOwnerWithHost(owner))
 			if err != nil {
