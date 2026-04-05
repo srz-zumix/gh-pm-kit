@@ -4,6 +4,7 @@ package v1
 import (
 	"fmt"
 
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/gh-pm-kit/pkg/projects"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
@@ -48,22 +49,6 @@ func NewMigrateCmd() *cobra.Command {
 				}
 			}
 
-			var srcOwner, srcRepoName string
-			if srcRepoFlag != "" {
-				srcRepo, err := parser.Repository(parser.RepositoryInput(srcRepoFlag))
-				if err != nil {
-					return fmt.Errorf("failed to resolve source repository: %w", err)
-				}
-				srcOwner = srcRepo.Owner
-				srcRepoName = srcRepo.Name
-			} else {
-				srcRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(srcOwnerFlag))
-				if err != nil {
-					return fmt.Errorf("failed to resolve source owner: %w", err)
-				}
-				srcOwner = srcRepo.Owner
-			}
-
 			if dstOwnerFlag == "" {
 				return fmt.Errorf("destination owner is required: use --dst")
 			}
@@ -72,9 +57,17 @@ func NewMigrateCmd() *cobra.Command {
 				return fmt.Errorf("failed to resolve destination owner: %w", err)
 			}
 
-			srcClientRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(srcOwnerFlag))
-			if err != nil {
-				return fmt.Errorf("failed to resolve source owner for client: %w", err)
+			var srcClientRepo repository.Repository
+			if srcRepoFlag != "" {
+				srcClientRepo, err = parser.Repository(parser.RepositoryInput(srcRepoFlag))
+				if err != nil {
+					return fmt.Errorf("failed to resolve source repository for client: %w", err)
+				}
+			} else {
+				srcClientRepo, err = parser.Repository(parser.RepositoryOwnerWithHost(srcOwnerFlag))
+				if err != nil {
+					return fmt.Errorf("failed to resolve source owner for client: %w", err)
+				}
 			}
 			srcClient, dstClient, err := gh.NewGitHubClientWith2Repos(srcClientRepo, dstRepo)
 			if err != nil {
@@ -86,11 +79,11 @@ func NewMigrateCmd() *cobra.Command {
 				Prune:     prune,
 			}
 			ctx := cmd.Context()
-			p, err := projects.MigrateProjectV1ToV2(ctx, srcClient, dstClient, srcClientRepo.Host, srcOwner, srcRepoName, dstRepo.Owner, srcNumber, migrateOpts)
+			p, err := projects.MigrateProjectV1ToV2(ctx, srcClient, dstClient, srcClientRepo.Host, srcClientRepo.Owner, srcClientRepo.Name, dstRepo.Owner, srcNumber, migrateOpts)
 			if err != nil {
-				return fmt.Errorf("failed to migrate classic project #%d from '%s' to '%s': %w", srcNumber, srcOwner, dstRepo.Owner, err)
+				return fmt.Errorf("failed to migrate classic project #%d from '%s' to '%s': %w", srcNumber, srcClientRepo.Owner, dstRepo.Owner, err)
 			}
-			logger.Info("Migrated classic project", "srcNumber", srcNumber, "srcOwner", srcOwner, "dstNumber", p.Number, "dstOwner", dstRepo.Owner, "url", p.URL)
+			logger.Info("Migrated classic project", "srcNumber", srcNumber, "srcOwner", srcClientRepo.Owner, "dstNumber", p.Number, "dstOwner", dstRepo.Owner, "url", p.URL)
 			return nil
 		},
 	}
