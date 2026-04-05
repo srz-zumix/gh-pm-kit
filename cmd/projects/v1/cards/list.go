@@ -17,6 +17,7 @@ import (
 // NewListCmd creates the projects v1 cards list command.
 func NewListCmd() *cobra.Command {
 	var ownerFlag string
+	var repoFlag string
 	opts := struct {
 		Exporter cmdutil.Exporter
 	}{}
@@ -43,16 +44,26 @@ func NewListCmd() *cobra.Command {
 					return fmt.Errorf("invalid project number or URL %q: %w", projectArg, err)
 				}
 
-				// Extract owner from URL if provided.
+				// Prefer repo/owner from URL over flags.
 				if projectURL, _ := parser.ParseProjectURL(projectArg); projectURL != nil {
-					if ownerFlag == "" {
-						ownerFlag = projectURL.Host + "/" + projectURL.Owner
+					if projectURL.Repo.Name != "" {
+						repoFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner + "/" + projectURL.Repo.Name
+					} else {
+						ownerFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 					}
 				}
 
-				clientRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(ownerFlag))
-				if err != nil {
-					return fmt.Errorf("failed to resolve owner: %w", err)
+				var clientRepo repository.Repository
+				if repoFlag != "" {
+					clientRepo, err = parser.Repository(parser.RepositoryInput(repoFlag))
+					if err != nil {
+						return fmt.Errorf("failed to resolve repository: %w", err)
+					}
+				} else {
+					clientRepo, err = parser.Repository(parser.RepositoryOwnerWithHost(ownerFlag))
+					if err != nil {
+						return fmt.Errorf("failed to resolve owner: %w", err)
+					}
 				}
 				client, err := gh.NewGitHubClientWithRepo(clientRepo)
 				if err != nil {
@@ -60,9 +71,9 @@ func NewListCmd() *cobra.Command {
 				}
 
 				ctx := cmd.Context()
-				project, err := gh.GetProjectV1ByNumber(ctx, client, repository.Repository{Owner: clientRepo.Owner}, projectNumber)
+				project, err := gh.GetProjectV1ByNumber(ctx, client, clientRepo, projectNumber)
 				if err != nil {
-					return fmt.Errorf("failed to get classic project #%d for '%s': %w", projectNumber, clientRepo.Owner, err)
+					return fmt.Errorf("failed to get classic project #%d for '%s': %w", projectNumber, parser.GetRepositoryFullName(clientRepo), err)
 				}
 
 				columns, err := client.ListProjectV1Columns(ctx, project.ID)
@@ -118,6 +129,7 @@ func NewListCmd() *cobra.Command {
 
 	f := cmd.Flags()
 	f.StringVarP(&ownerFlag, "owner", "o", "", "Owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
+	f.StringVarP(&repoFlag, "repo", "R", "", "Repository in the format '[HOST/]OWNER/REPO'; for repository-scoped projects")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
 }

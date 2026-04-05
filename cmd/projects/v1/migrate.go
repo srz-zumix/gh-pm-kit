@@ -39,10 +39,12 @@ func NewMigrateCmd() *cobra.Command {
 				return fmt.Errorf("invalid source project number or URL %q: %w", args[0], err)
 			}
 
-			// Extract owner from URL if provided.
+			// Prefer repo/owner from URL over flags.
 			if projectURL, _ := parser.ParseProjectURL(args[0]); projectURL != nil {
-				if srcOwnerFlag == "" {
-					srcOwnerFlag = projectURL.Host + "/" + projectURL.Owner
+				if projectURL.Repo.Name != "" {
+					srcRepoFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner + "/" + projectURL.Repo.Name
+				} else {
+					srcOwnerFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 				}
 			}
 
@@ -84,7 +86,7 @@ func NewMigrateCmd() *cobra.Command {
 				Prune:     prune,
 			}
 			ctx := cmd.Context()
-			p, err := projects.MigrateProjectV1ToV2(ctx, srcClient, dstClient, srcOwner, srcRepoName, dstRepo.Owner, srcNumber, migrateOpts)
+			p, err := projects.MigrateProjectV1ToV2(ctx, srcClient, dstClient, srcClientRepo.Host, srcOwner, srcRepoName, dstRepo.Owner, srcNumber, migrateOpts)
 			if err != nil {
 				return fmt.Errorf("failed to migrate classic project #%d from '%s' to '%s': %w", srcNumber, srcOwner, dstRepo.Owner, err)
 			}

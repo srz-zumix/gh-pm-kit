@@ -48,7 +48,7 @@ func NewMigrateCmd() *cobra.Command {
 			}
 			srcOwner := srcOwnerFlag
 			if projectURL, _ := parser.ParseProjectURL(args[0]); projectURL != nil {
-				srcOwner = projectURL.Host + "/" + projectURL.Owner
+				srcOwner = projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 			}
 			srcRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(srcOwner))
 			if err != nil {
@@ -64,7 +64,7 @@ func NewMigrateCmd() *cobra.Command {
 					return fmt.Errorf("invalid destination project number or URL %q: %w", args[1], err)
 				}
 				if projectURL, _ := parser.ParseProjectURL(args[1]); projectURL != nil {
-					urlDstOwner := projectURL.Host + "/" + projectURL.Owner
+					urlDstOwner := projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 					if dstOwnerFlag == "" {
 						dstOwnerFlag = urlDstOwner
 					} else if dstOwnerFlag != urlDstOwner {

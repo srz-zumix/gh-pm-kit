@@ -35,47 +35,42 @@ func NewListCmd() *cobra.Command {
 				return fmt.Errorf("invalid project number or URL %q: %w", args[0], err)
 			}
 
-			// Prefer owner from URL if provided.
+			// Prefer repo/owner from URL over flags.
 			if projectURL, _ := parser.ParseProjectURL(args[0]); projectURL != nil {
-				if ownerFlag == "" {
-					ownerFlag = projectURL.Host + "/" + projectURL.Owner
+				if projectURL.Repo.Name != "" {
+					repoFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner + "/" + projectURL.Repo.Name
+				} else {
+					ownerFlag = projectURL.Repo.Host + "/" + projectURL.Repo.Owner
 				}
 			}
 
-			var owner, repoName string
+			var clientRepo repository.Repository
 			if repoFlag != "" {
-				repo, err := parser.Repository(parser.RepositoryInput(repoFlag))
+				clientRepo, err = parser.Repository(parser.RepositoryInput(repoFlag))
 				if err != nil {
 					return fmt.Errorf("failed to resolve repository: %w", err)
 				}
-				owner = repo.Owner
-				repoName = repo.Name
 			} else {
-				repo, err := parser.Repository(parser.RepositoryOwnerWithHost(ownerFlag))
+				clientRepo, err = parser.Repository(parser.RepositoryOwnerWithHost(ownerFlag))
 				if err != nil {
 					return fmt.Errorf("failed to resolve owner: %w", err)
 				}
-				owner = repo.Owner
 			}
 
-			clientRepo, err := parser.Repository(parser.RepositoryOwnerWithHost(ownerFlag))
-			if err != nil {
-				return fmt.Errorf("failed to resolve owner for client: %w", err)
-			}
 			client, err := gh.NewGitHubClientWithRepo(clientRepo)
 			if err != nil {
 				return fmt.Errorf("failed to create GitHub client: %w", err)
 			}
 
 			ctx := cmd.Context()
-			project, err := gh.GetProjectV1ByNumber(ctx, client, repository.Repository{Owner: owner, Name: repoName}, number)
+			project, err := gh.GetProjectV1ByNumber(ctx, client, clientRepo, number)
 			if err != nil {
-				return fmt.Errorf("failed to get classic project #%d for '%s': %w", number, owner, err)
+				return fmt.Errorf("failed to get classic project #%d for '%s': %w", number, parser.GetRepositoryFullName(clientRepo), err)
 			}
 
 			columns, err := client.ListProjectV1Columns(ctx, project.ID)
 			if err != nil {
-				return fmt.Errorf("failed to list columns for classic project #%d of '%s': %w", number, owner, err)
+				return fmt.Errorf("failed to list columns for classic project #%d of '%s': %w", number, parser.GetRepositoryFullName(clientRepo), err)
 			}
 
 			renderer := render.NewRenderer(opts.Exporter)
