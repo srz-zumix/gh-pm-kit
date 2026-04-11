@@ -16,8 +16,9 @@ func NewProjectsCmd() *cobra.Command {
 		Long:  `Manage GitHub Projects (v2)`,
 	}
 
-	cmd.AddCommand(projects.NewListCmd())
+	cmd.AddCommand(projects.NewDiffCmd())
 	cmd.AddCommand(projects.NewItemCmd())
+	cmd.AddCommand(projects.NewListCmd())
 	cmd.AddCommand(projects.NewMigrateCmd())
 	cmd.AddCommand(projects.NewV1Cmd())
 	return cmd
