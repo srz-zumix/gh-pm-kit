@@ -28,7 +28,8 @@ func NewDiffCmd() *cobra.Command {
 		Long: "Show the differences between a source and destination GitHub Project v2.\n\n" +
 			"Items are matched using the migration markers embedded during migration, so\n" +
 			"this command is most useful after running 'projects migrate'.\n\n" +
-			"Custom fields are compared by name and type. Items are shown as:\n" +
+			"Custom fields are compared by name and type, and single-select fields also\n" +
+			"include option name differences. Items are shown as:\n" +
 			"  -  present only in the source (not yet migrated)\n" +
 			"  +  present only in the destination (added after migration)\n" +
 			"  ~  present in both but with differences (title or field values)\n\n" +
