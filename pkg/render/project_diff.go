@@ -27,10 +27,12 @@ type ProjectFieldValueDiff struct {
 
 // ProjectItemDiffEntry represents the diff of a single project item.
 type ProjectItemDiffEntry struct {
-	Status     ProjectDiffStatus       `json:"status"`
-	SrcTitle   string                  `json:"srcTitle,omitempty"`
-	DstTitle   string                  `json:"dstTitle,omitempty"`
-	FieldDiffs []ProjectFieldValueDiff `json:"fieldDiffs,omitempty"`
+	Status      ProjectDiffStatus       `json:"status"`
+	SrcTitle    string                  `json:"srcTitle,omitempty"`
+	DstTitle    string                  `json:"dstTitle,omitempty"`
+	SrcArchived bool                    `json:"srcArchived"`
+	DstArchived bool                    `json:"dstArchived"`
+	FieldDiffs  []ProjectFieldValueDiff `json:"fieldDiffs,omitempty"`
 }
 
 // ProjectFieldDiffEntry represents the diff of a single custom field definition.
@@ -164,6 +166,17 @@ func renderProjectItemDiff(item ProjectItemDiffEntry, colorEnabled bool) string 
 		result = fmt.Sprintf("~ %s", title)
 		if item.SrcTitle != item.DstTitle && item.SrcTitle != "" && item.DstTitle != "" {
 			result += fmt.Sprintf(" (title: %q -> %q)", item.SrcTitle, item.DstTitle)
+		}
+		if item.SrcArchived != item.DstArchived {
+			srcLine := fmt.Sprintf("  - archived: %v", item.SrcArchived)
+			dstLine := fmt.Sprintf("  + archived: %v", item.DstArchived)
+			if colorEnabled {
+				result += "\n" + color.RedString(srcLine)
+				result += "\n" + color.GreenString(dstLine)
+			} else {
+				result += "\n" + srcLine
+				result += "\n" + dstLine
+			}
 		}
 		for _, fv := range item.FieldDiffs {
 			srcLine := fmt.Sprintf("  - %s: %s", fv.FieldName, fv.SrcValue)

@@ -4,6 +4,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/srz-zumix/gh-pm-kit/pkg/render"
@@ -161,14 +162,16 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 			matchedDstIDs[di.ID] = true
 			fvDiffs := diffItemFieldValues(si, di)
 			status := render.ProjectDiffStatusEqual
-			if si.Content.Title != di.Content.Title || len(fvDiffs) > 0 {
+			if si.Content.Title != di.Content.Title || si.IsArchived != di.IsArchived || len(fvDiffs) > 0 {
 				status = render.ProjectDiffStatusModified
 			}
 			diffs = append(diffs, render.ProjectItemDiffEntry{
-				Status:     status,
-				SrcTitle:   si.Content.Title,
-				DstTitle:   di.Content.Title,
-				FieldDiffs: fvDiffs,
+				Status:      status,
+				SrcTitle:    si.Content.Title,
+				DstTitle:    di.Content.Title,
+				SrcArchived: si.IsArchived,
+				DstArchived: di.IsArchived,
+				FieldDiffs:  fvDiffs,
 			})
 		}
 	}
@@ -189,7 +192,8 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 }
 
 // diffItemFieldValues compares migratable field values between two project items.
-// Fields present only on dst (e.g., set after migration) are also reported.
+// It builds value maps for both src and dst, then iterates over the union of their
+// migratable field names so that fields present only in dst are also reported.
 func diffItemFieldValues(src, dst *gh.ProjectV2Item) []render.ProjectFieldValueDiff {
 	srcFVMap := make(map[string]string, len(src.FieldValues))
 	for _, fv := range src.FieldValues {
@@ -205,42 +209,34 @@ func diffItemFieldValues(src, dst *gh.ProjectV2Item) []render.ProjectFieldValueD
 		}
 	}
 
-	// Track field names already reported to avoid duplicates.
-	reported := make(map[string]bool)
-	var diffs []render.ProjectFieldValueDiff
+	// Build the union of migratable field names for a complete comparison.
+	fieldNames := make(map[string]struct{}, len(srcFVMap)+len(dstFVMap))
+	for name := range srcFVMap {
+		fieldNames[name] = struct{}{}
+	}
+	for name := range dstFVMap {
+		fieldNames[name] = struct{}{}
+	}
 
-	// Compare src fields against dst.
-	for _, fv := range src.FieldValues {
-		if !migratableDataTypes[fv.ValueType] {
-			continue
-		}
-		srcVal := projectFieldValueString(fv)
-		dstVal := dstFVMap[fv.FieldName]
+	// Sort names to produce deterministic output.
+	sorted := make([]string, 0, len(fieldNames))
+	for name := range fieldNames {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+
+	var diffs []render.ProjectFieldValueDiff
+	for _, name := range sorted {
+		srcVal := srcFVMap[name]
+		dstVal := dstFVMap[name]
 		if srcVal != dstVal {
 			diffs = append(diffs, render.ProjectFieldValueDiff{
-				FieldName: fv.FieldName,
+				FieldName: name,
 				SrcValue:  srcVal,
 				DstValue:  dstVal,
 			})
 		}
-		reported[fv.FieldName] = true
 	}
-
-	// Detect dst-only fields (present on dst but absent from src).
-	for _, fv := range dst.FieldValues {
-		if !migratableDataTypes[fv.ValueType] || reported[fv.FieldName] {
-			continue
-		}
-		dstVal := projectFieldValueString(fv)
-		if dstVal != "" {
-			diffs = append(diffs, render.ProjectFieldValueDiff{
-				FieldName: fv.FieldName,
-				SrcValue:  "",
-				DstValue:  dstVal,
-			})
-		}
-	}
-
 	return diffs
 }
 
