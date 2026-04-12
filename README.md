@@ -138,7 +138,7 @@ Custom fields are compared by name and type (single-select fields also compare o
 Items are shown as:
 
 - `-` present only in the source (not yet migrated)
-- `+` present only in the destination (added after migration)
+- `+` present only in the destination (not matched by a migration marker)
 - `~` present in both but with differences (title, archived state, or field values)
 
 ```sh
