@@ -80,7 +80,7 @@ func NewDiffCmd() *cobra.Command {
 
 			ctx := cmd.Context()
 			report, err := projects.DiffProjects(
-				ctx, srcClient, dstClient, srcRepo.Host, srcRepo.Owner, dstRepo.Owner, srcNumber, dstNumber,
+				ctx, srcClient, dstClient, srcRepo, dstRepo, srcNumber, dstNumber,
 			)
 			if err != nil {
 				return fmt.Errorf("failed to diff projects: %w", err)

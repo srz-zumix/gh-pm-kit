@@ -7,45 +7,57 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/srz-zumix/gh-pm-kit/pkg/render"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 )
 
+// projectLabel builds the diff header label for a project side.
+// When host is non-empty and not the default github.com, it is prefixed to owner
+// so that cross-host diffs remain unambiguous.
+func projectLabel(host, owner string, number int) string {
+	const defaultHost = "github.com"
+	if host != "" && host != defaultHost {
+		return fmt.Sprintf("#%d %s/%s", number, host, owner)
+	}
+	return fmt.Sprintf("#%d %s", number, owner)
+}
+
 // DiffProjects compares a source and destination GitHub Project v2.
 // Items are matched using the migration markers embedded during migration.
 // Returns a ProjectDiffReport suitable for rendering.
-func DiffProjects(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcNumber, dstNumber int) (*render.ProjectDiffReport, error) {
-	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcOwner, srcNumber)
+func DiffProjects(ctx context.Context, src, dst *gh.GitHubClient, srcRepo, dstRepo repository.Repository, srcNumber, dstNumber int) (*render.ProjectDiffReport, error) {
+	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcRepo.Owner, srcNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get source project #%d for '%s': %w", srcNumber, srcOwner, err)
+		return nil, fmt.Errorf("failed to get source project #%d for '%s': %w", srcNumber, srcRepo.Owner, err)
 	}
-	srcFields, err := gh.ListProjectV2Fields(ctx, src, srcOwner, srcNumber)
+	srcFields, err := gh.ListProjectV2Fields(ctx, src, srcRepo.Owner, srcNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list fields for source project #%d of '%s': %w", srcNumber, srcOwner, err)
+		return nil, fmt.Errorf("failed to list fields for source project #%d of '%s': %w", srcNumber, srcRepo.Owner, err)
 	}
-	srcItems, err := gh.ListProjectV2Items(ctx, src, srcOwner, srcNumber)
+	srcItems, err := gh.ListProjectV2Items(ctx, src, srcRepo.Owner, srcNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list items for source project #%d of '%s': %w", srcNumber, srcOwner, err)
+		return nil, fmt.Errorf("failed to list items for source project #%d of '%s': %w", srcNumber, srcRepo.Owner, err)
 	}
 
-	dstProject, err := gh.GetProjectV2ByNumber(ctx, dst, dstOwner, dstNumber)
+	dstProject, err := gh.GetProjectV2ByNumber(ctx, dst, dstRepo.Owner, dstNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get destination project #%d for '%s': %w", dstNumber, dstOwner, err)
+		return nil, fmt.Errorf("failed to get destination project #%d for '%s': %w", dstNumber, dstRepo.Owner, err)
 	}
-	dstFields, err := gh.ListProjectV2Fields(ctx, dst, dstOwner, dstNumber)
+	dstFields, err := gh.ListProjectV2Fields(ctx, dst, dstRepo.Owner, dstNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list fields for destination project #%d of '%s': %w", dstNumber, dstOwner, err)
+		return nil, fmt.Errorf("failed to list fields for destination project #%d of '%s': %w", dstNumber, dstRepo.Owner, err)
 	}
-	dstItems, err := gh.ListProjectV2Items(ctx, dst, dstOwner, dstNumber)
+	dstItems, err := gh.ListProjectV2Items(ctx, dst, dstRepo.Owner, dstNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list items for destination project #%d of '%s': %w", dstNumber, dstOwner, err)
+		return nil, fmt.Errorf("failed to list items for destination project #%d of '%s': %w", dstNumber, dstRepo.Owner, err)
 	}
 
 	return &render.ProjectDiffReport{
-		SrcLabel: fmt.Sprintf("#%d %s", srcProject.Number, srcOwner),
-		DstLabel: fmt.Sprintf("#%d %s", dstProject.Number, dstOwner),
+		SrcLabel: projectLabel(srcRepo.Host, srcRepo.Owner, srcProject.Number),
+		DstLabel: projectLabel(dstRepo.Host, dstRepo.Owner, dstProject.Number),
 		Fields:   diffProjectFields(srcFields, dstFields),
-		Items:    diffProjectItems(srcHost, srcOwner, srcNumber, srcItems, dstItems),
+		Items:    diffProjectItems(srcRepo.Host, srcRepo.Owner, srcNumber, srcItems, dstItems),
 	}, nil
 }
 
