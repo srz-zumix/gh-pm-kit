@@ -144,8 +144,12 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 	// Build a map from expected migration marker -> *ProjectV2Item for dst items.
 	// Each dst item's body may contain at most one marker for a given source project,
 	// so we scan dstItems once and store pointers for O(1) lookup during the src loop.
+	// parsedDstIDs tracks items from which a valid marker was successfully extracted.
+	// Items whose body contains the prefix but is missing the closing " -->" are NOT
+	// added to parsedDstIDs so they surface as dst-only instead of being silently dropped.
 	prefix := projectMarkerPrefix(srcHost, srcOwner, srcProjectNumber)
 	dstByMarker := make(map[string]*gh.ProjectV2Item, len(dstItems))
+	parsedDstIDs := make(map[string]bool, len(dstItems))
 	for i := range dstItems {
 		di := &dstItems[i]
 		t := di.Content.Type
@@ -160,10 +164,13 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 		}
 		end := strings.Index(di.Content.Body[start:], " -->")
 		if end == -1 {
+			// Prefix found but closing " -->" is absent: malformed marker.
+			// Do not add to dstByMarker; the item will be reported as dst-only.
 			continue
 		}
 		marker := di.Content.Body[start : start+end+4] // includes " -->"
 		dstByMarker[marker] = di
+		parsedDstIDs[di.ID] = true
 	}
 
 	var diffs []render.ProjectItemDiffEntry
@@ -196,10 +203,13 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 		}
 	}
 
-	// Collect dst-only items: those that do not carry any migration marker for this source project.
+	// Collect dst-only items: items that were neither matched to a src item nor had a
+	// valid migration marker parsed. Items with a valid marker but no matched src item
+	// (parsedDstIDs) are skipped — their src was removed after migration and they
+	// represent a known migrated state rather than a post-migration addition.
 	for i := range dstItems {
 		di := &dstItems[i]
-		if matchedDstIDs[di.ID] || strings.Contains(di.Content.Body, prefix) {
+		if matchedDstIDs[di.ID] || parsedDstIDs[di.ID] {
 			continue
 		}
 		diffs = append(diffs, render.ProjectItemDiffEntry{
