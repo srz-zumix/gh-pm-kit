@@ -109,10 +109,18 @@ func projectFieldsEqual(a, b *gh.ProjectV2Field) bool {
 		if len(a.Options) != len(b.Options) {
 			return false
 		}
+
+		// Compare option names without depending on slice order.
+		optionCounts := make(map[string]int, len(a.Options))
 		for i := range a.Options {
-			if a.Options[i].Name != b.Options[i].Name {
+			optionCounts[a.Options[i].Name]++
+		}
+		for i := range b.Options {
+			name := b.Options[i].Name
+			if optionCounts[name] == 0 {
 				return false
 			}
+			optionCounts[name]--
 		}
 	}
 	return true
