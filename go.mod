@@ -5,8 +5,9 @@ go 1.26.1
 require (
 	github.com/cli/cli/v2 v2.88.1
 	github.com/cli/go-gh/v2 v2.13.0
+	github.com/fatih/color v1.19.0
 	github.com/spf13/cobra v1.10.2
-	github.com/srz-zumix/go-gh-extension v0.4.15
+	github.com/srz-zumix/go-gh-extension v0.4.22
 )
 
 require (
@@ -39,7 +40,6 @@ require (
 	github.com/ddddddO/gtree v1.13.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
-	github.com/fatih/color v1.19.0 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/google/go-github/v84 v84.0.0 // indirect

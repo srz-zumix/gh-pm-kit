@@ -129,6 +129,31 @@ gh pm-kit projects item list <number|URL> [flags]
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
 | `-t, --template string` | | Format JSON output using a Go template |
 
+### projects diff
+
+Show the differences between a source and destination GitHub Project v2.
+Items are matched using the migration markers embedded during `projects migrate`, so this command is most useful after migration.
+
+Custom fields are compared by name and type (single-select fields also compare option names).
+Items are shown as:
+
+- `-` present only in the source (not yet migrated)
+- `+` present only in the destination (not matched by a migration marker)
+- `~` present in both but with differences (title, archived state, or field values)
+
+```sh
+gh pm-kit projects diff <src-number|src-URL> <dst-number|dst-URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-s, --src string` | current owner | Source owner in the format `[HOST/]OWNER` |
+| `-d, --dst string` | | Destination owner in the format `[HOST/]OWNER` (required unless a destination URL is given) |
+| `--color string` | `auto` | Colorize output: `always\|never\|auto` |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
 ### projects migrate
 
 Migrate a GitHub Project v2 (New Projects) from one owner to another.
