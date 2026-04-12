@@ -32,7 +32,7 @@ func NewDiffCmd() *cobra.Command {
 			"include option name differences. Items are shown as:\n" +
 			"  -  present only in the source (not yet migrated)\n" +
 			"  +  present only in the destination (added after migration)\n" +
-			"  ~  present in both but with differences (title or field values)\n\n" +
+			"  ~  present in both but with differences (title, archived state, or field values)\n\n" +
 			"The source and destination projects can each be specified by their number\n" +
 			"or by URL (e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
