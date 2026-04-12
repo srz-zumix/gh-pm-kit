@@ -31,7 +31,7 @@ func NewDiffCmd() *cobra.Command {
 			"Custom fields are compared by name and type, and single-select fields also\n" +
 			"include option name differences. Items are shown as:\n" +
 			"  -  present only in the source (not yet migrated)\n" +
-			"  +  present only in the destination (added after migration)\n" +
+			"  +  present only in the destination (not matched by migration marker)\n" +
 			"  ~  present in both but with differences (title, archived state, or field values)\n\n" +
 			"The source and destination projects can each be specified by their number\n" +
 			"or by URL (e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
