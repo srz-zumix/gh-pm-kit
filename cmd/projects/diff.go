@@ -95,7 +95,7 @@ func NewDiffCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVarP(&srcOwnerFlag, "src", "s", "", "Source owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
 	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required unless a destination URL is given)")
-	f.StringVar(&colorFlag, "color", render.ColorFlagAuto, "Colorize output ('always', 'never', 'auto')")
+	cmdutil.StringEnumFlag(cmd, &colorFlag, "color", "", render.ColorFlagAuto, render.ColorFlags, "Colorize output")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
 }
