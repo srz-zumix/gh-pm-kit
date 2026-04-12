@@ -118,14 +118,40 @@ func projectFieldsEqual(a, b *gh.ProjectV2Field) bool {
 }
 
 // diffProjectItems returns diffs for all items, matched via migration markers.
+// dstItems is indexed by marker string once upfront to avoid O(|src|*|dst|) scanning.
 func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, dstItems []gh.ProjectV2Item) []render.ProjectItemDiffEntry {
+	// Build a map from expected migration marker -> *ProjectV2Item for dst items.
+	// Each dst item's body may contain at most one marker for a given source project,
+	// so we scan dstItems once and store pointers for O(1) lookup during the src loop.
+	prefix := projectMarkerPrefix(srcHost, srcOwner, srcProjectNumber)
+	dstByMarker := make(map[string]*gh.ProjectV2Item, len(dstItems))
+	for i := range dstItems {
+		di := &dstItems[i]
+		t := di.Content.Type
+		if t != gh.ProjectV2ItemTypeDraftIssue && t != gh.ProjectV2ItemTypeIssue {
+			continue
+		}
+		// Extract the exact marker token from the body so the map key matches
+		// what migratedItemMarker() produces for a given source item ID.
+		start := strings.Index(di.Content.Body, prefix)
+		if start == -1 {
+			continue
+		}
+		end := strings.Index(di.Content.Body[start:], " -->")
+		if end == -1 {
+			continue
+		}
+		marker := di.Content.Body[start : start+end+4] // includes " -->"
+		dstByMarker[marker] = di
+	}
+
 	var diffs []render.ProjectItemDiffEntry
 	matchedDstIDs := make(map[string]bool)
 
 	for i := range srcItems {
 		si := &srcItems[i]
 		marker := migratedItemMarker(srcHost, srcOwner, srcProjectNumber, si.ID)
-		di := findItemByMarker(dstItems, marker)
+		di := dstByMarker[marker]
 		if di == nil {
 			diffs = append(diffs, render.ProjectItemDiffEntry{
 				Status:   render.ProjectDiffStatusSrcOnly,
@@ -148,7 +174,6 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 	}
 
 	// Collect dst-only items: those that do not carry any migration marker for this source project.
-	prefix := projectMarkerPrefix(srcHost, srcOwner, srcProjectNumber)
 	for i := range dstItems {
 		di := &dstItems[i]
 		if matchedDstIDs[di.ID] || strings.Contains(di.Content.Body, prefix) {
@@ -164,13 +189,27 @@ func diffProjectItems(srcHost, srcOwner string, srcProjectNumber int, srcItems, 
 }
 
 // diffItemFieldValues compares migratable field values between two project items.
+// Fields present only on dst (e.g., set after migration) are also reported.
 func diffItemFieldValues(src, dst *gh.ProjectV2Item) []render.ProjectFieldValueDiff {
-	dstFVMap := make(map[string]string, len(dst.FieldValues))
-	for _, fv := range dst.FieldValues {
-		dstFVMap[fv.FieldName] = projectFieldValueString(fv)
+	srcFVMap := make(map[string]string, len(src.FieldValues))
+	for _, fv := range src.FieldValues {
+		if migratableDataTypes[fv.ValueType] {
+			srcFVMap[fv.FieldName] = projectFieldValueString(fv)
+		}
 	}
 
+	dstFVMap := make(map[string]string, len(dst.FieldValues))
+	for _, fv := range dst.FieldValues {
+		if migratableDataTypes[fv.ValueType] {
+			dstFVMap[fv.FieldName] = projectFieldValueString(fv)
+		}
+	}
+
+	// Track field names already reported to avoid duplicates.
+	reported := make(map[string]bool)
 	var diffs []render.ProjectFieldValueDiff
+
+	// Compare src fields against dst.
 	for _, fv := range src.FieldValues {
 		if !migratableDataTypes[fv.ValueType] {
 			continue
@@ -184,7 +223,24 @@ func diffItemFieldValues(src, dst *gh.ProjectV2Item) []render.ProjectFieldValueD
 				DstValue:  dstVal,
 			})
 		}
+		reported[fv.FieldName] = true
 	}
+
+	// Detect dst-only fields (present on dst but absent from src).
+	for _, fv := range dst.FieldValues {
+		if !migratableDataTypes[fv.ValueType] || reported[fv.FieldName] {
+			continue
+		}
+		dstVal := projectFieldValueString(fv)
+		if dstVal != "" {
+			diffs = append(diffs, render.ProjectFieldValueDiff{
+				FieldName: fv.FieldName,
+				SrcValue:  "",
+				DstValue:  dstVal,
+			})
+		}
+	}
+
 	return diffs
 }
 
