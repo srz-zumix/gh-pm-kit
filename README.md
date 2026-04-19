@@ -16,6 +16,16 @@ gh extension install srz-zumix/gh-pm-kit
 
 For detailed installation instructions and setup for each shell, see the [Shell Completion Guide](https://github.com/srz-zumix/go-gh-extension/blob/main/docs/shell-completion.md).
 
+## Agent Skills
+
+gh-pm-kit bundles agent skills for AI. Use the `skills` subcommand to install and manage them.
+
+```sh
+gh pm-kit skills [subcommand] [args...]
+```
+
+For details, see [Songmu/skillsmith](https://github.com/Songmu/skillsmith).
+
 ## Usage
 
 ```sh
