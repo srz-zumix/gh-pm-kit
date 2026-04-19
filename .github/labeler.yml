@@ -1,11 +1,17 @@
 ci:
-- any:
-  - changed-files:
-    - any-glob-to-all-files: '.github/**'
-- color: '#7c0bb2'
+  - any:
+    - changed-files:
+      - any-glob-to-all-files: '.github/**'
+  - color: '#7c0bb2'
 
 documentation:
-- changed-files:
-  - any-glob-to-any-file:
-    - 'docs/**'
-    - README.md
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'docs/**'
+      - README.md
+
+skills:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'skills/**'
+  - color: '#48d1cc'
