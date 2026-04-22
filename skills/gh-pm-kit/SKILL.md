@@ -1,6 +1,7 @@
-| name | gh-pm-kit |
-| --- | --- |
-| description | gh-pm-kit GitHub CLI extension for managing and migrating GitHub Projects (v2 and classic) and Discussions — including cross-host migration, project diff, item listing, and discussion search. |
+---
+name: gh-pm-kit
+description: gh-pm-kit GitHub CLI extension for managing and migrating GitHub Projects (v2 and classic) and Discussions — including cross-host migration, project diff, item listing, and discussion search.
+---
 
 # gh pm-kit
 
@@ -291,6 +292,9 @@ Show the differences between a source and destination GitHub Project v2.
 Items are matched using migration markers embedded during `projects migrate`,
 so this command is most useful after migration.
 
+> **Tip**: After migration, the destination project number is assigned automatically.
+> Run `gh pm-kit projects list --owner <dst-owner>` first to find the destination project number.
+
 Diff legend:
 - `-` present only in the source (not yet migrated)
 - `+` present only in the destination (not matched by a migration marker)
@@ -534,6 +538,9 @@ gh pm-kit projects v1 migrate https://github.com/owner/repo/projects/1 --dst dst
 # Migrate for a specific source owner
 gh pm-kit projects v1 migrate 1 --owner src-owner --dst dst-owner
 
+# Cross-host migration (GitHub Enterprise Server to github.com)
+gh pm-kit projects v1 migrate 1 --owner ghes.example.com/src-owner --dst dst-owner
+
 # Migrate a repository-scoped classic project
 gh pm-kit projects v1 migrate 1 --repo src-owner/src-repo --dst dst-owner
 
@@ -564,10 +571,13 @@ gh pm-kit projects list --owner src-org
 # Step 2: Migrate a project
 gh pm-kit projects migrate 1 --src src-org --dst dst-org
 
-# Step 3: Verify migration with diff
+# Step 3: Find the destination project number
+gh pm-kit projects list --owner dst-org
+
+# Step 4: Verify migration with diff
 gh pm-kit projects diff \
   https://github.com/orgs/src-org/projects/1 \
-  https://github.com/orgs/dst-org/projects/1
+  https://github.com/orgs/dst-org/projects/<dst-number>
 ```
 
 ### Cross-host migration (GitHub Enterprise Server → github.com)
