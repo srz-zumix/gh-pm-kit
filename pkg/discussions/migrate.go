@@ -27,6 +27,26 @@ type MigrateOptions struct {
 	Prune bool
 	// IncludeReactions embeds reaction summaries into migrated discussion and comment bodies.
 	IncludeReactions bool
+	// Interval is the wait time inserted before each content-creating request (discussion,
+	// comment, reply) to avoid GitHub's secondary rate limit ("was submitted too quickly").
+	// When zero or negative, no throttling is applied.
+	Interval time.Duration
+}
+
+// throttle waits for opts.Interval (respecting context cancellation) before a content-creating
+// request. It is a no-op when opts is nil or the interval is not positive.
+func throttle(ctx context.Context, opts *MigrateOptions) error {
+	if opts == nil || opts.Interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(opts.Interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // migratedFromMarker returns the hidden HTML comment embedded in migrated discussion bodies
@@ -193,7 +213,9 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 		for i, c := range dstCtx.categories {
 			availableSlugs[i] = c.Slug
 		}
-		return nil, fmt.Errorf("category with slug %q not found in destination repository '%s/%s' (available: %s)", slug, dstRepo.Owner, dstRepo.Name, strings.Join(availableSlugs, ", "))
+		return nil, fmt.Errorf("category with slug %q not found in destination repository '%s/%s' (available: %s); "+
+			"discussion categories cannot be created via the GitHub API, so create the category in the destination repository settings or map it to an existing one with --category",
+			slug, dstRepo.Owner, dstRepo.Name, strings.Join(availableSlugs, ", "))
 	}
 
 	marker := migratedFromMarker(srcRepo, srcDisc.Number)
@@ -225,6 +247,9 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 		return nil, err
 	}
 
+	if err := throttle(ctx, opts); err != nil {
+		return nil, err
+	}
 	created, err := gh.CreateDiscussion(ctx, dst, gh.CreateDiscussionOption{
 		RepositoryID: dstCtx.repoID,
 		CategoryID:   dstCategory.ID,
@@ -385,6 +410,9 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 			commentReactions = comment.Reactions.Nodes
 		}
 		body := formatMigratedBody(comment.Author.Login, comment.Body, commentReactions)
+		if err := throttle(ctx, opts); err != nil {
+			return err
+		}
 		dstCommentID, err := gh.CreateDiscussionComment(ctx, dst, dstDisc, body)
 		if err != nil {
 			return fmt.Errorf("failed to create comment: %w", err)
@@ -399,6 +427,9 @@ func migrateReactionsAndComments(ctx context.Context, src *gh.GitHubClient, srcR
 				}
 			}
 			replyBody := formatMigratedBody(reply.Author.Login, reply.Body, replyReactions)
+			if err := throttle(ctx, opts); err != nil {
+				return err
+			}
 			if _, err := gh.AddDiscussionCommentReply(ctx, dst, dstDisc, dstCommentID, replyBody); err != nil {
 				return fmt.Errorf("failed to create reply: %w", err)
 			}
