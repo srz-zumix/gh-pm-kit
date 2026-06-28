@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
@@ -238,7 +239,50 @@ func migrateDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo reposi
 		return created, fmt.Errorf("failed to migrate reactions and comments: %w", err)
 	}
 
+	if err := syncDiscussionState(ctx, dst, created, srcDisc); err != nil {
+		return created, err
+	}
+
 	return created, nil
+}
+
+// closeReasonFromState maps a source discussion's state reason to a destination close reason.
+// Unknown or absent reasons default to RESOLVED.
+func closeReasonFromState(stateReason *string) gh.DiscussionCloseReason {
+	if stateReason == nil {
+		return gh.DiscussionCloseReasonResolved
+	}
+	switch strings.ToUpper(*stateReason) {
+	case "OUTDATED":
+		return gh.DiscussionCloseReasonOutdated
+	case "DUPLICATE":
+		return gh.DiscussionCloseReasonDuplicate
+	default:
+		return gh.DiscussionCloseReasonResolved
+	}
+}
+
+// syncDiscussionState aligns the destination discussion's open/closed state with the source.
+// A newly migrated discussion is always created open, so this closes it when the source is
+// closed. On re-runs it also reopens a destination that the source has since reopened.
+func syncDiscussionState(ctx context.Context, dst *gh.GitHubClient, dstDisc *gh.Discussion, srcDisc *gh.Discussion) error {
+	srcClosed := srcDisc.ClosedAt != nil
+	dstClosed := dstDisc.ClosedAt != nil
+	switch {
+	case srcClosed && !dstClosed:
+		reason := closeReasonFromState(srcDisc.StateReason)
+		if err := gh.CloseDiscussion(ctx, dst, dstDisc, reason); err != nil {
+			return fmt.Errorf("failed to close discussion %q: %w", dstDisc.Title, err)
+		}
+		now := time.Now()
+		dstDisc.ClosedAt = &now
+	case !srcClosed && dstClosed:
+		if err := gh.ReopenDiscussion(ctx, dst, dstDisc); err != nil {
+			return fmt.Errorf("failed to reopen discussion %q: %w", dstDisc.Title, err)
+		}
+		dstDisc.ClosedAt = nil
+	}
+	return nil
 }
 
 // findDiscussionByMarker returns a pointer to the first discussion in all whose body contains
@@ -298,6 +342,10 @@ func overwriteDiscussion(ctx context.Context, src *gh.GitHubClient, srcRepo repo
 	// Re-populate comments from source
 	if err := migrateReactionsAndComments(ctx, src, srcRepo, dst, prev, srcDisc, opts); err != nil {
 		return prev, fmt.Errorf("failed to migrate reactions and comments: %w", err)
+	}
+
+	if err := syncDiscussionState(ctx, dst, prev, srcDisc); err != nil {
+		return prev, err
 	}
 
 	return prev, nil
