@@ -186,6 +186,9 @@ gh pm-kit discussions migrate --dst dest-owner/dest-repo --overwrite
 # Migrate without embedding reaction summaries
 gh pm-kit discussions migrate --dst dest-owner/dest-repo --no-reactions
 
+# Throttle content creation to avoid secondary rate limit (wait 2s before each create)
+gh pm-kit discussions migrate --dst dest-owner/dest-repo --interval 2s
+
 # Preview what would be migrated (read-only mode)
 gh pm-kit discussions migrate --dst dest-owner/dest-repo --read-only
 ```
@@ -199,6 +202,7 @@ gh pm-kit discussions migrate --dst dest-owner/dest-repo --read-only
 | `--enable-discussions` | `false` | Enable Discussions on the destination repository if not already enabled |
 | `--overwrite` | `false` | Overwrite a previously migrated discussion identified by its migration marker |
 | `--no-reactions` | `false` | Do not embed reaction summaries into migrated discussion and comment bodies |
+| `--interval duration` | `1s` | Wait time before each content-creating request (discussion, comment, reply) to avoid GitHub's secondary rate limit; set to `0` to disable |
 | `--color string` | `auto` | Use color in output: `always\|never\|auto` |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
