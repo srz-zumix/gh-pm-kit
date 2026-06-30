@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -183,6 +184,11 @@ func MigrateDiscussions(ctx context.Context, src, dst *gh.GitHubClient, srcRepo,
 	if err != nil {
 		return nil, fmt.Errorf("failed to list discussions in '%s/%s': %w", srcRepo.Owner, srcRepo.Name, err)
 	}
+
+	// Migrate oldest first so destination numbering follows the source chronology.
+	sort.SliceStable(srcDiscussions, func(i, j int) bool {
+		return srcDiscussions[i].CreatedAt.Before(srcDiscussions[j].CreatedAt)
+	})
 
 	dstCtx, err := prepareDstContext(ctx, dst, dstRepo, opts)
 	if err != nil {
