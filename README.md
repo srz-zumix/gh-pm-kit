@@ -84,9 +84,27 @@ gh pm-kit discussions migrate --dst OWNER/REPO [flags]
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
 | `-t, --template string` | | Format JSON output using a Go template |
 
+### discussions repos
+
+List repositories owned by an owner that have Discussions enabled.
+
+```sh
+gh pm-kit discussions repos [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--all` | `false` | List all repositories, including those without Discussions enabled |
+| `--color string` | `auto` | Use color in output: `always\|never\|auto` |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+| `--owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+
 ### discussions search
 
 Search discussions in a repository using a search query.
+When `--owner` is set without `--repo`, discussions are searched across all repositories owned by the owner instead.
 The query can include label filters and other search criteria.
 
 ```sh
@@ -96,7 +114,7 @@ gh pm-kit discussions search [query...] [flags]
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-R, --repo string` | current repo | Repository in the format `[HOST/]OWNER/REPO` |
-| `--owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--owner string` | current owner | Owner in the format `[HOST/]OWNER`; searches across all repositories owned by the owner when `--repo` is not set |
 | `-l, --label strings` | | Filter discussions by labels (repeatable) |
 | `--color string` | `auto` | Use color in output: `always\|never\|auto` |
 | `--format string` | | Output format: `json` |

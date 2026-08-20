@@ -19,6 +19,7 @@ func NewDiscussionsCmd() *cobra.Command {
 	cmd.AddCommand(discussions.NewListCmd())
 	cmd.AddCommand(discussions.NewSearchCmd())
 	cmd.AddCommand(discussions.NewMigrateCmd())
+	cmd.AddCommand(discussions.NewReposCmd())
 	return cmd
 }
 
