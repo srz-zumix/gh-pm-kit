@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
-	"github.com/google/go-github/v90/github"
 	"github.com/spf13/cobra"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/parser"
@@ -36,12 +35,12 @@ func NewReposCmd() *cobra.Command {
 				return fmt.Errorf("failed to create GitHub client: %w", err)
 			}
 			ctx := cmd.Context()
-			repos, err := gh.ListOwnerRepositories(ctx, client, repository.Owner)
+			repos, err := gh.ListOwnerRepositories(ctx, client, repository)
 			if err != nil {
 				return fmt.Errorf("failed to list repositories for owner '%s': %w", repository.Owner, err)
 			}
 			if !all {
-				repos = filterReposWithDiscussions(repos)
+				repos = gh.FilterRepositoriesWithDiscussions(repos)
 			}
 			renderer := render.NewRenderer(opts.Exporter)
 			renderer.SetColor(colorFlag)
@@ -54,14 +53,4 @@ func NewReposCmd() *cobra.Command {
 	f.BoolVar(&all, "all", false, "List all repositories, including those without Discussions enabled")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
-}
-
-func filterReposWithDiscussions(repos []*github.Repository) []*github.Repository {
-	filtered := make([]*github.Repository, 0, len(repos))
-	for _, r := range repos {
-		if r.GetHasDiscussions() {
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered
 }
