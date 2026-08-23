@@ -186,7 +186,9 @@ gh pm-kit projects diff <src-number|src-URL> <dst-number|dst-URL> [flags]
 ### projects migrate
 
 Migrate a GitHub Project v2 (New Projects) from one owner to another.
-Copies project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION), and items.
+Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION), views, items, item order, item archive state, and status updates.
+Missing options of an existing destination SINGLE_SELECT field are added, and the color/description of matching options are refreshed.
+Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views with the same name are left untouched because the API has no view update endpoint.
 
 Items are migrated as draft issues by default.
 If `--repo` is specified, the migration first searches for an existing issue carrying the migration marker in that repository and links it to the project.
@@ -195,7 +197,7 @@ If no matching issue is found and `--create-issue` is set, a new issue is create
 If a destination project number or URL is given as the second argument, that project is used as the migration target.
 Without a destination project, a new destination project is created when needed.
 
-Items already migrated are identified by a hidden marker and skipped by default.
+Items and status updates already migrated are identified by a hidden marker and skipped by default.
 
 ```sh
 gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
@@ -207,7 +209,7 @@ gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
 | `-d, --dst string` | **(required)** | Destination owner in the format `[HOST/]OWNER` (required unless a destination URL is given as the second argument) |
 | `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; items are linked to matching issues (by migration marker) in this repository |
 | `--create-issue` | `false` | When `--repo` is set and no matching issue is found, create a new issue instead of a draft issue |
-| `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; for migrated items, delete and re-create them instead of skipping them |
+| `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped |
 
 ---
 

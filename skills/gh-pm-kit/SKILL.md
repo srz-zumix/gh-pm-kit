@@ -377,7 +377,12 @@ gh pm-kit projects diff 1 2 --src src-owner --dst dst-owner --format json
 ### projects migrate
 
 Migrate a GitHub Project v2 from one owner to another.
-Copies project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION), and items.
+Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION),
+views, items, item order, item archive state, and status updates.
+Missing options of an existing destination SINGLE_SELECT field are added, and the color/description of
+matching options are refreshed.
+Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views
+with the same name are left untouched because the API has no view update endpoint.
 
 Items are migrated as draft issues by default.
 If `--repo` is specified, the migration first searches for an existing issue carrying the migration marker
@@ -387,7 +392,7 @@ a new issue is created; otherwise a draft issue is used as a fallback.
 If a destination project number or URL is given as the second argument, that project is used as the target.
 Without a destination project, a new destination project is created when needed.
 
-Already-migrated items are identified by a hidden marker and skipped by default.
+Already-migrated items and status updates are identified by a hidden marker and skipped by default.
 
 ```sh
 gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
@@ -417,7 +422,7 @@ gh pm-kit projects migrate 1 --dst dst-owner --repo dst-owner/dst-repo
 # Migrate items as new issues when no matching issue is found
 gh pm-kit projects migrate 1 --dst dst-owner --repo dst-owner/dst-repo --create-issue
 
-# Overwrite previously migrated items
+# Overwrite previously migrated items and status updates
 gh pm-kit projects migrate 1 --dst dst-owner --overwrite
 
 # Preview migration without making changes

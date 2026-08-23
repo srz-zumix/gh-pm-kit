@@ -25,8 +25,11 @@ func NewMigrateCmd() *cobra.Command {
 		Use:   "migrate <number|URL> [dst-number|dst-URL]",
 		Short: "Migrate a GitHub Project v2 to another owner",
 		Long: "Migrate a GitHub Project v2 (New Projects) from one owner to another.\n" +
-			"The source project metadata, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT,\n" +
-			"ITERATION), and items are copied to the destination owner.\n\n" +
+			"The source project metadata, open/closed state, custom fields (TEXT, NUMBER,\n" +
+			"DATE, SINGLE_SELECT, ITERATION), views, items, item order, item archive state,\n" +
+			"and status updates are copied to the destination owner. Views are recreated with\n" +
+			"their layout, filter, visible fields, sorting, and grouping; destination views\n" +
+			"with the same name are left untouched.\n\n" +
 			"Items are migrated as draft issues by default. If --repo is specified, the\n" +
 			"migration first searches for an existing issue in that repository that carries\n" +
 			"the migration marker and links it to the project. If no matching issue is found\n" +
@@ -37,8 +40,8 @@ func NewMigrateCmd() *cobra.Command {
 			"If a destination project number or URL is given as the second argument,\n" +
 			"that project is used as the migration target. Without a destination project,\n" +
 			"a new destination project is created when needed.\n\n" +
-			"Items already migrated are identified by a hidden marker and skipped by default.\n" +
-			"Use --overwrite to delete and re-create matching migrated items.\n\n" +
+			"Items and status updates already migrated are identified by a hidden marker and\n" +
+			"skipped by default. Use --overwrite to re-migrate them.\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -129,7 +132,7 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required unless a destination URL is given as the second argument)")
 	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
 	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
-	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; for migrated items, delete and re-create them instead of skipping them")
+	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped")
 	f.BoolVar(&prune, "prune", false, "Delete ALL destination projects matching by migration marker or by title before creating a new one; only effective when no destination project is given (destructive)")
 	f.BoolVar(&pruneItems, "prune-items", false, "Delete previously migrated items (carrying the hidden migration marker) from the destination project before migrating (destructive; overrides --overwrite; applies in all modes)")
 	_ = f.MarkHidden("prune")
