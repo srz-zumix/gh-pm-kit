@@ -283,6 +283,8 @@ gh pm-kit projects list --format json --jq '.[].number'
 List items in a GitHub Project v2.
 The project can be specified by its number or by its URL
 (e.g. `https://github.com/orgs/my-org/projects/1`).
+Archived items are included when the host supports them (GitHub.com and recent GitHub Enterprise Server);
+older hosts return only non-archived items.
 
 ```sh
 gh pm-kit projects item list <number|URL> [flags]
@@ -327,6 +329,7 @@ gh pm-kit projects item list 1 --format json --jq '.[].title'
 Show the differences between a source and destination GitHub Project v2.
 Items are matched using migration markers embedded during `projects migrate`,
 so this command is most useful after migration.
+Archived items are included when the host supports them (GitHub.com and recent GitHub Enterprise Server).
 
 > **Tip**: After migration, the destination project number is assigned automatically.
 > Run `gh pm-kit projects list --owner <dst-owner>` first to find the destination project number.
@@ -379,15 +382,24 @@ gh pm-kit projects diff 1 2 --src src-owner --dst dst-owner --format json
 Migrate a GitHub Project v2 from one owner to another.
 Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION),
 views, items, item order, item archive state, and status updates.
-Missing options of an existing destination SINGLE_SELECT field are added, and the color/description of
-matching options are refreshed.
+Options of an existing destination SINGLE_SELECT field are aligned with the source: missing options are
+added, the color/description of matching options are refreshed, and source options are reordered to match
+the source so board layout columns keep the same order. Destination-only options are appended at the end.
+ITERATION fields are recreated with both their past and current iterations, so sprints already completed
+in the source project are reproduced.
 Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views
-with the same name are left untouched because the API has no view update endpoint.
+with the same name are left untouched because the API has no view update endpoint, and destination views
+that do not exist in the source (such as the default view of a newly created project) are deleted.
+Built-in workflows (automations) are not migrated: the API exposes only their name and enabled flag and
+offers no way to create or enable one. Enabled source workflows that are disabled in the destination are
+reported as a warning so they can be enabled manually.
 
 Items are migrated as draft issues by default.
 If `--repo` is specified, the migration first searches for an existing issue carrying the migration marker
 in that repository and links it to the project. If no matching issue is found and `--create-issue` is set,
 a new issue is created; otherwise a draft issue is used as a fallback.
+Archived items are migrated and archived again in the destination. Older GitHub Enterprise Server versions
+do not expose archived items through the API, so archived items of such a source project cannot be migrated.
 
 If a destination project number or URL is given as the second argument, that project is used as the target.
 Without a destination project, a new destination project is created when needed.
@@ -557,9 +569,11 @@ gh pm-kit projects v1 cards list 1 "Backlog" --format json
 ### projects v1 migrate
 
 Migrate a GitHub Project (classic) to a new GitHub Projects v2 project.
-A new Projects v2 project is created under the destination owner.
-Each column becomes an option in a `Column` single-select field,
-and each card is migrated as a draft issue with the `Column` field set.
+A new Projects v2 project is created under the destination owner with the source name, body, and open/closed state.
+Each column becomes an option in a `Column` single-select field, and a board view grouped by that field is created to mirror the classic layout.
+Every card is migrated in its source order with the `Column` field set, and archived cards are migrated and archived again.
+Note cards keep their note as the title and body; issue and pull-request cards are resolved on the source host so that their title and body are reproduced with a link back to the original.
+Cards are migrated as draft issues by default. With `--repo`, an existing issue carrying the migration marker is linked instead, and `--create-issue` creates one when none is found.
 Already-migrated items are identified by a hidden marker and skipped unless `--overwrite` is specified.
 
 ```sh
@@ -583,7 +597,10 @@ gh pm-kit projects v1 migrate 1 --owner src-owner --dst dst-owner
 gh pm-kit projects v1 migrate 1 --owner ghes.example.com/src-owner --dst dst-owner
 
 # Migrate a repository-scoped classic project
-gh pm-kit projects v1 migrate 1 --repo src-owner/src-repo --dst dst-owner
+gh pm-kit projects v1 migrate 1 --src-repo src-owner/src-repo --dst dst-owner
+
+# Link cards to matching issues in a destination repository, creating them when missing
+gh pm-kit projects v1 migrate 1 --dst dst-owner --repo dst-owner/dst-repo --create-issue
 
 # Overwrite previously migrated items
 gh pm-kit projects v1 migrate 1 --dst dst-owner --overwrite
@@ -595,8 +612,10 @@ gh pm-kit projects v1 migrate 1 --dst dst-owner --read-only
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-o, --owner string` | current owner | Source owner in the format `[HOST/]OWNER`; inferred from URL if a project URL is given |
-| `-R, --repo string` | | Source repository in the format `[HOST/]OWNER/REPO`; for repository-scoped classic projects; inferred from URL if a repo-scoped project URL is given |
+| `-R, --src-repo string` | | Source repository in the format `[HOST/]OWNER/REPO`; for repository-scoped classic projects; inferred from URL if a repo-scoped project URL is given |
 | `-d, --dst string` | **(required)** | Destination owner in the format `[HOST/]OWNER` |
+| `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; cards are linked to matching issues (by migration marker) in this repository |
+| `--create-issue` | `false` | When `--repo` is set and no matching issue is found, create a new issue instead of a draft issue |
 | `--overwrite` | `false` | Re-migrate already-migrated items instead of skipping them |
 
 ---
@@ -725,7 +744,6 @@ information leakage and cross-host collisions. They are not visible in the rende
 When a marker is found in the destination:
 - The item / project is **skipped** by default
 - Use `--overwrite` to delete and recreate it
-- Use `--prune-items` (destructive, hidden flag) to delete **all** marked items before migrating
 
 ---
 

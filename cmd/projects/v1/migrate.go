@@ -17,8 +17,9 @@ func NewMigrateCmd() *cobra.Command {
 	var srcOwnerFlag string
 	var srcRepoFlag string
 	var dstOwnerFlag string
+	var issueRepoFlag string
+	var createIssue bool
 	var overwrite bool
-	var prune bool
 
 	cmd := &cobra.Command{
 		Use:   "migrate <number|URL>",
@@ -26,9 +27,18 @@ func NewMigrateCmd() *cobra.Command {
 		Long: "Migrate a GitHub Project (classic) to a new GitHub Projects v2 project.\n\n" +
 			"The source classic project is specified by its number or URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
-			"A new Projects v2 project is created under the destination owner.\n" +
-			"Each column becomes an option in a 'Column' single-select field,\n" +
-			"and each card is migrated as a draft issue with the Column field set.\n\n" +
+			"A new Projects v2 project is created under the destination owner with the\n" +
+			"source name, body, and open/closed state. Each column becomes an option in a\n" +
+			"'Column' single-select field, a board view grouped by that field is created to\n" +
+			"mirror the classic layout, and every card is migrated in its source order with\n" +
+			"the Column field set. Archived cards are migrated and archived again.\n\n" +
+			"Note cards keep their note as the title and body. Issue and pull-request cards\n" +
+			"are resolved on the source host so that their title and body are reproduced.\n\n" +
+			"Cards are migrated as draft issues by default. If --repo is specified, the\n" +
+			"migration first searches for an existing issue in that repository that carries\n" +
+			"the migration marker and links it to the project. If no matching issue is found\n" +
+			"and --create-issue is set, a new issue is created; otherwise a draft issue is\n" +
+			"used as a fallback.\n\n" +
 			"Already-migrated items are identified by a hidden marker and skipped\n" +
 			"unless --overwrite is specified.\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').\n" +
@@ -76,7 +86,14 @@ func NewMigrateCmd() *cobra.Command {
 
 			migrateOpts := &projects.MigrateV1Options{
 				Overwrite: overwrite,
-				Prune:     prune,
+			}
+			if issueRepoFlag != "" {
+				issueRepo, err := parser.Repository(parser.RepositoryInput(issueRepoFlag))
+				if err != nil {
+					return fmt.Errorf("invalid --repo value %q: %w", issueRepoFlag, err)
+				}
+				migrateOpts.IssueRepo = &issueRepo
+				migrateOpts.CreateIssue = createIssue
 			}
 			ctx := cmd.Context()
 			p, err := projects.MigrateProjectV1ToV2(ctx, srcClient, dstClient, srcClientRepo.Host, srcClientRepo.Owner, srcClientRepo.Name, dstRepo.Owner, srcNumber, migrateOpts)
@@ -90,10 +107,10 @@ func NewMigrateCmd() *cobra.Command {
 
 	f := cmd.Flags()
 	f.StringVarP(&srcOwnerFlag, "owner", "o", "", "Source owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
-	f.StringVarP(&srcRepoFlag, "repo", "R", "", "Source repository in the format '[HOST/]OWNER/REPO'; for repository-scoped classic projects")
+	f.StringVarP(&srcRepoFlag, "src-repo", "R", "", "Source repository in the format '[HOST/]OWNER/REPO'; for repository-scoped classic projects")
 	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required)")
+	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; cards are linked to matching issues (by migration marker) in this repository")
+	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
 	f.BoolVar(&overwrite, "overwrite", false, "Re-migrate already-migrated items instead of skipping them")
-	f.BoolVar(&prune, "prune", false, "Delete previously migrated destination projects before migrating (destructive)")
-	_ = f.MarkHidden("prune")
 	return cmd
 }

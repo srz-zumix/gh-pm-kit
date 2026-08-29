@@ -18,8 +18,6 @@ func NewMigrateCmd() *cobra.Command {
 	var issueRepoFlag string
 	var createIssue bool
 	var overwrite bool
-	var prune bool
-	var pruneItems bool
 
 	cmd := &cobra.Command{
 		Use:   "migrate <number|URL> [dst-number|dst-URL]",
@@ -27,14 +25,21 @@ func NewMigrateCmd() *cobra.Command {
 		Long: "Migrate a GitHub Project v2 (New Projects) from one owner to another.\n" +
 			"The source project metadata, open/closed state, custom fields (TEXT, NUMBER,\n" +
 			"DATE, SINGLE_SELECT, ITERATION), views, items, item order, item archive state,\n" +
-			"and status updates are copied to the destination owner. Views are recreated with\n" +
-			"their layout, filter, visible fields, sorting, and grouping; destination views\n" +
-			"with the same name are left untouched.\n\n" +
+			"and status updates are copied to the destination owner. SINGLE_SELECT options are\n" +
+			"aligned with the source, including their order, so board layout columns match.\n" +
+			"ITERATION fields keep their past and current iterations.\n" +
+			"Views are recreated with their layout, filter, visible fields, sorting, and\n" +
+			"grouping; destination views with the same name are left untouched, and\n" +
+			"destination views that do not exist in the source are deleted.\n" +
+			"Built-in workflows (automations) cannot be migrated because the API offers no\n" +
+			"way to create or enable one; they are reported as a warning instead.\n\n" +
 			"Items are migrated as draft issues by default. If --repo is specified, the\n" +
 			"migration first searches for an existing issue in that repository that carries\n" +
 			"the migration marker and links it to the project. If no matching issue is found\n" +
 			"and --create-issue is set, a new issue is created; otherwise a draft issue is\n" +
-			"used as a fallback.\n\n" +
+			"used as a fallback. Archived items are archived again in the destination, but\n" +
+			"older GitHub Enterprise Server versions do not expose archived items through\n" +
+			"the API and therefore cannot migrate them.\n\n" +
 			"The source project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"If a destination project number or URL is given as the second argument,\n" +
@@ -90,9 +95,7 @@ func NewMigrateCmd() *cobra.Command {
 			}
 
 			migrateOpts := &projects.MigrateOptions{
-				Overwrite:  overwrite,
-				Prune:      prune,
-				PruneItems: pruneItems,
+				Overwrite: overwrite,
 			}
 			if issueRepoFlag != "" {
 				issueRepo, err := parser.Repository(parser.RepositoryInput(issueRepoFlag))
@@ -133,9 +136,5 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
 	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
 	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped")
-	f.BoolVar(&prune, "prune", false, "Delete ALL destination projects matching by migration marker or by title before creating a new one; only effective when no destination project is given (destructive)")
-	f.BoolVar(&pruneItems, "prune-items", false, "Delete previously migrated items (carrying the hidden migration marker) from the destination project before migrating (destructive; overrides --overwrite; applies in all modes)")
-	_ = f.MarkHidden("prune")
-	_ = f.MarkHidden("prune-items")
 	return cmd
 }
