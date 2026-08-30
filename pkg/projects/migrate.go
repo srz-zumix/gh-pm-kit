@@ -4,14 +4,50 @@ package projects
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 )
+
+// projectCleanupTimeout bounds the best-effort restore of a project's closed
+// state when a migration fails, so cleanup cannot hang on a slow API.
+const projectCleanupTimeout = 30 * time.Second
+
+// reopenForMigration reopens a closed destination project so it accepts content
+// mutations during migration. It returns a restore function to be deferred by the
+// caller: on migration failure (*retErr != nil) it best-effort re-closes the project
+// to preserve its original state; on success it is a no-op because the migration's
+// applyProjectClosedState already sets the intended state. When the project was
+// already open the restore is a no-op.
+func reopenForMigration(ctx context.Context, dst *gh.GitHubClient, project *gh.ProjectV2) (func(retErr *error), error) {
+	if !project.Closed {
+		return func(*error) {}, nil
+	}
+	if _, err := gh.SetProjectV2Closed(ctx, dst, project.ID, false); err != nil {
+		return nil, fmt.Errorf("failed to reopen destination project '%s' for migration: %w", project.Title, err)
+	}
+	project.Closed = false
+	return func(retErr *error) {
+		if retErr == nil || *retErr == nil {
+			return
+		}
+		// Derive a fresh, bounded context so restore still runs even if the
+		// migration failed because ctx was canceled or timed out.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), projectCleanupTimeout)
+		defer cancel()
+		if _, err := gh.SetProjectV2Closed(cleanupCtx, dst, project.ID, true); err != nil {
+			*retErr = errors.Join(*retErr, fmt.Errorf("failed to restore closed state on destination project '%s' after a failed migration: %w", project.Title, err))
+			return
+		}
+		project.Closed = true
+	}, nil
+}
 
 // MigrateOptions controls migration behaviour for GitHub Projects v2.
 type MigrateOptions struct {
@@ -220,14 +256,14 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 // migrateIntoProject migrates source project contents into an existing destination project
 // in-place: refreshes metadata, creates any missing fields, and migrates items according to opts.
 // Item-level idempotency (skip / overwrite) is governed by opts as in any other migration mode.
-func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
-	// A closed project rejects content mutations, so reopen it for the duration of the migration.
-	if prev.Closed {
-		if _, err := gh.SetProjectV2Closed(ctx, dst, prev.ID, false); err != nil {
-			return prev, fmt.Errorf("failed to reopen destination project '%s' for migration: %w", prev.Title, err)
-		}
-		prev.Closed = false
+func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (_ *gh.ProjectV2, retErr error) {
+	// A closed project rejects content mutations, so reopen it for the duration of
+	// the migration and restore its original state if the migration fails.
+	restore, err := reopenForMigration(ctx, dst, prev)
+	if err != nil {
+		return prev, err
 	}
+	defer restore(&retErr)
 	if err := updateProjectMetadata(ctx, dst, prev, srcProject, marker); err != nil {
 		return prev, err
 	}

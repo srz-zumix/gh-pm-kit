@@ -58,7 +58,7 @@ const v1BoardViewName = "Board"
 // It creates the destination project, adds a Column single-select field for each source column,
 // and migrates all cards (including archived ones) as items in the source card order.
 // A migration marker is embedded in the destination project readme for idempotent re-runs.
-func MigrateProjectV1ToV2(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, srcRepoName, dstOwner string, srcNumber int, opts *MigrateV1Options) (*gh.ProjectV2, error) {
+func MigrateProjectV1ToV2(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, srcRepoName, dstOwner string, srcNumber int, opts *MigrateV1Options) (_ *gh.ProjectV2, retErr error) {
 	srcRepo := repository.Repository{Owner: srcOwner, Name: srcRepoName}
 	srcProject, err := gh.GetProjectV1ByNumber(ctx, src, srcRepo, srcNumber)
 	if err != nil {
@@ -91,13 +91,13 @@ func MigrateProjectV1ToV2(ctx context.Context, src, dst *gh.GitHubClient, srcHos
 			logger.Info("skipping already-migrated v1 project", "title", prev.Title, "projectID", prev.ID)
 			return prev, nil
 		}
-		// A closed project rejects content mutations, so reopen it for the duration of the migration.
-		if prev.Closed {
-			if _, err := gh.SetProjectV2Closed(ctx, dst, prev.ID, false); err != nil {
-				return prev, fmt.Errorf("failed to reopen destination project '%s' for migration: %w", prev.Title, err)
-			}
-			prev.Closed = false
+		// A closed project rejects content mutations, so reopen it for the duration
+		// of the migration and restore its original state if the migration fails.
+		restore, err := reopenForMigration(ctx, dst, prev)
+		if err != nil {
+			return prev, err
 		}
+		defer restore(&retErr)
 		columnField, err := resolveColumnField(ctx, dst, dstOwner, prev)
 		if err != nil {
 			return prev, err
