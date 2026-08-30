@@ -4,30 +4,56 @@ package projects
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
 	"github.com/srz-zumix/go-gh-extension/pkg/logger"
 )
 
+// projectCleanupTimeout bounds the best-effort restore of a project's closed
+// state when a migration fails, so cleanup cannot hang on a slow API.
+const projectCleanupTimeout = 30 * time.Second
+
+// reopenForMigration reopens a closed destination project so it accepts content
+// mutations during migration. It returns a restore function to be deferred by the
+// caller: on migration failure (*retErr != nil) it best-effort re-closes the project
+// to preserve its original state; on success it is a no-op because the migration's
+// applyProjectClosedState already sets the intended state. When the project was
+// already open the restore is a no-op.
+func reopenForMigration(ctx context.Context, dst *gh.GitHubClient, project *gh.ProjectV2) (func(retErr *error), error) {
+	if !project.Closed {
+		return func(*error) {}, nil
+	}
+	if _, err := gh.SetProjectV2Closed(ctx, dst, project.ID, false); err != nil {
+		return nil, fmt.Errorf("failed to reopen destination project '%s' for migration: %w", project.Title, err)
+	}
+	project.Closed = false
+	return func(retErr *error) {
+		if retErr == nil || *retErr == nil {
+			return
+		}
+		// Derive a fresh, bounded context so restore still runs even if the
+		// migration failed because ctx was canceled or timed out.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), projectCleanupTimeout)
+		defer cancel()
+		if _, err := gh.SetProjectV2Closed(cleanupCtx, dst, project.ID, true); err != nil {
+			*retErr = errors.Join(*retErr, fmt.Errorf("failed to restore closed state on destination project '%s' after a failed migration: %w", project.Title, err))
+			return
+		}
+		project.Closed = true
+	}, nil
+}
+
 // MigrateOptions controls migration behaviour for GitHub Projects v2.
 type MigrateOptions struct {
 	// Overwrite deletes the previously-migrated item (identified by migration marker)
 	// and recreates it. Without this option, already-migrated items are skipped.
 	Overwrite bool
-	// Prune deletes ALL destination projects that carry the source-project migration
-	// marker, as well as any destination project whose title matches the source project
-	// title, before creating a new destination project. Only meaningful in MigrateProject
-	// (i.e. when no explicit destination project is given); ignored in MigrateProjectTo and
-	// MigrateProjectItems where the destination project is fixed. This is a highly
-	// destructive operation: entire projects are removed.
-	Prune bool
-	// PruneItems deletes all destination project items that carry the source-project migration
-	// marker before migrating. Applies in all migration modes (MigrateProject,
-	// MigrateProjectTo, MigrateProjectItems). This is destructive and overrides Overwrite.
-	PruneItems bool
 	// IssueRepo, if set, searches for an existing issue with the migration marker in this
 	// repository and links it to the project. If no matching issue is found and CreateIssue
 	// is true, a new issue is created instead. If CreateIssue is false, falls back to draft issue.
@@ -67,6 +93,14 @@ func migratedProjectMarker(srcHost, srcOwner string, srcProjectNumber int) strin
 	return fmt.Sprintf("<!-- gh-pm-kit:migrated-project:%s -->", projectHash)
 }
 
+// migratedStatusUpdateMarker returns the HTML comment marker embedded in migrated status update bodies.
+func migratedStatusUpdateMarker(srcHost, srcOwner string, srcProjectNumber int, srcStatusUpdateID string) string {
+	projectKey := fmt.Sprintf("%s:%s#%d", srcHost, srcOwner, srcProjectNumber)
+	projectHash := fmt.Sprintf("%x", sha256.Sum256([]byte(projectKey)))[:16]
+	updateHash := fmt.Sprintf("%x", sha256.Sum256([]byte(srcStatusUpdateID)))[:16]
+	return fmt.Sprintf("<!-- gh-pm-kit:migrated-project-status-update:%s/%s -->", projectHash, updateHash)
+}
+
 // findProjectByMarker returns a pointer to the first project whose readme contains marker, or nil.
 func findProjectByMarker(projects []gh.ProjectV2, marker string) *gh.ProjectV2 {
 	for i := range projects {
@@ -75,17 +109,6 @@ func findProjectByMarker(projects []gh.ProjectV2, marker string) *gh.ProjectV2 {
 		}
 	}
 	return nil
-}
-
-// findAllProjectsByMarker returns all projects whose readme contains marker.
-func findAllProjectsByMarker(projects []gh.ProjectV2, marker string) []*gh.ProjectV2 {
-	var result []*gh.ProjectV2
-	for i := range projects {
-		if projects[i].Readme != nil && strings.Contains(*projects[i].Readme, marker) {
-			result = append(result, &projects[i])
-		}
-	}
-	return result
 }
 
 // embedMarker appends marker to s (separated by a blank line) if not already present.
@@ -117,42 +140,6 @@ func (c *dstProjectContext) removeItem(itemID string) {
 			return
 		}
 	}
-}
-
-// pruneProjectItems deletes all items in dstCtx that carry any migration marker from the
-// given source project, identified by the project marker prefix. Item values are collected
-// before any deletion to avoid iterator invalidation, and dstCtx.items is rebuilt
-// afterwards. Must be called at most once per migration run, before the items loop.
-func pruneProjectItems(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, dstCtx *dstProjectContext) error {
-	prefix := projectMarkerPrefix(srcHost, srcOwner, srcProjectNumber)
-	// Collect matching items first to avoid mutating the slice during iteration.
-	var toDelete []gh.ProjectV2Item
-	for _, item := range dstCtx.items {
-		if (item.Content.Type == gh.ProjectV2ItemTypeDraftIssue || item.Content.Type == gh.ProjectV2ItemTypeIssue) &&
-			strings.Contains(item.Content.Body, prefix) {
-			toDelete = append(toDelete, item)
-		}
-	}
-	if len(toDelete) == 0 {
-		return nil
-	}
-	deleted := make(map[string]bool, len(toDelete))
-	for _, item := range toDelete {
-		if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, item.ID); err != nil {
-			return fmt.Errorf("failed to delete item '%s' during prune: %w", item.Content.Title, err)
-		}
-		deleted[item.ID] = true
-		logger.Info("pruned migrated item", "title", item.Content.Title, "itemID", item.ID)
-	}
-	// Rebuild the items cache excluding deleted entries.
-	remaining := make([]gh.ProjectV2Item, 0, len(dstCtx.items)-len(toDelete))
-	for _, item := range dstCtx.items {
-		if !deleted[item.ID] {
-			remaining = append(remaining, item)
-		}
-	}
-	dstCtx.items = remaining
-	return nil
 }
 
 // findItemByMarker returns a pointer to the first draft-issue or issue item whose body
@@ -226,35 +213,12 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 		return nil, fmt.Errorf("failed to list destination projects for '%s': %w", dstOwner, err)
 	}
 
-	if opts != nil && opts.Prune {
-		// Delete ALL destination projects matching by marker OR by title.
-		deleted := make(map[string]bool)
-		for _, p := range findAllProjectsByMarker(dstProjects, projectMarker) {
-			if err := gh.DeleteProjectV2(ctx, dst, p.ID); err != nil {
-				return nil, fmt.Errorf("failed to delete destination project '%s' during prune: %w", p.Title, err)
-			}
-			deleted[p.ID] = true
-			logger.Info("pruned previously migrated project", "title", p.Title, "projectID", p.ID)
-		}
-		for i := range dstProjects {
-			p := &dstProjects[i]
-			if deleted[p.ID] {
-				continue
-			}
-			if p.Title == srcProject.Title {
-				if err := gh.DeleteProjectV2(ctx, dst, p.ID); err != nil {
-					return nil, fmt.Errorf("failed to delete destination project '%s' during prune: %w", p.Title, err)
-				}
-				logger.Info("pruned same-title project", "title", p.Title, "projectID", p.ID)
-			}
-		}
-	} else if prev := findProjectByMarker(dstProjects, projectMarker); prev != nil {
-		// Continue with overwriteProject when either full overwrite or item pruning is requested.
-		if opts == nil || (!opts.Overwrite && !opts.PruneItems) {
+	if prev := findProjectByMarker(dstProjects, projectMarker); prev != nil {
+		if opts == nil || !opts.Overwrite {
 			logger.Info("skipping already-migrated project", "title", prev.Title, "projectID", prev.ID)
 			return prev, nil
 		}
-		// Overwrite or item-prune: update the existing destination project in-place.
+		// Overwrite: update the existing destination project in-place.
 		return migrateIntoProject(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject, srcFields, srcItems, prev, projectMarker, opts)
 	}
 
@@ -273,28 +237,33 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 	if err != nil {
 		return dstProject, err
 	}
-	warnSourceViews(ctx, src, srcOwner, projectNumber)
+	migrateViews(ctx, src, dst, srcOwner, dstOwner, projectNumber, dstProject, dstFieldByName)
+	reportWorkflows(ctx, src, dst, srcOwner, dstOwner, projectNumber, dstProject)
 	dstCtx := &dstProjectContext{
 		projectID:   string(dstProject.ID),
 		fieldByName: dstFieldByName,
 	}
-	if opts != nil && opts.PruneItems {
-		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, projectNumber, dstCtx); err != nil {
-			return dstProject, err
-		}
+	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, projectNumber, srcItems, dstCtx, opts); err != nil {
+		return dstProject, err
 	}
-	for i := range srcItems {
-		if _, err := migrateItem(ctx, dst, srcHost, srcOwner, projectNumber, &srcItems[i], dstCtx, opts); err != nil {
-			return dstProject, err
-		}
+	migrateStatusUpdates(ctx, src, dst, srcHost, srcOwner, dstOwner, projectNumber, dstProject, opts)
+	if err := applyProjectClosedState(ctx, dst, dstProject, srcProject); err != nil {
+		return dstProject, err
 	}
 	return dstProject, nil
 }
 
 // migrateIntoProject migrates source project contents into an existing destination project
 // in-place: refreshes metadata, creates any missing fields, and migrates items according to opts.
-// Item-level idempotency (skip / overwrite / prune) is governed by opts as in any other migration mode.
-func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (*gh.ProjectV2, error) {
+// Item-level idempotency (skip / overwrite) is governed by opts as in any other migration mode.
+func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProject *gh.ProjectV2, srcFields []gh.ProjectV2Field, srcItems []gh.ProjectV2Item, prev *gh.ProjectV2, marker string, opts *MigrateOptions) (_ *gh.ProjectV2, retErr error) {
+	// A closed project rejects content mutations, so reopen it for the duration of
+	// the migration and restore its original state if the migration fails.
+	restore, err := reopenForMigration(ctx, dst, prev)
+	if err != nil {
+		return prev, err
+	}
+	defer restore(&retErr)
 	if err := updateProjectMetadata(ctx, dst, prev, srcProject, marker); err != nil {
 		return prev, err
 	}
@@ -306,24 +275,22 @@ func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost,
 	if err != nil {
 		return prev, err
 	}
-	warnSourceViews(ctx, src, srcOwner, srcProject.Number)
+	migrateViews(ctx, src, dst, srcOwner, dstOwner, srcProject.Number, prev, dstFieldByName)
+	reportWorkflows(ctx, src, dst, srcOwner, dstOwner, srcProject.Number, prev)
 	dstCtx.fieldByName = dstFieldByName
-	if opts != nil && opts.PruneItems {
-		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, srcProject.Number, dstCtx); err != nil {
-			return prev, err
-		}
+	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, srcProject.Number, srcItems, dstCtx, opts); err != nil {
+		return prev, err
 	}
-	for i := range srcItems {
-		if _, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProject.Number, &srcItems[i], dstCtx, opts); err != nil {
-			return prev, err
-		}
+	migrateStatusUpdates(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject.Number, prev, opts)
+	if err := applyProjectClosedState(ctx, dst, prev, srcProject); err != nil {
+		return prev, err
 	}
 	return prev, nil
 }
 
 // MigrateProjectTo migrates a source project into a specific existing destination project.
 // Metadata and missing custom fields are always applied; item-level behaviour (skip already-migrated
-// items, overwrite, or prune) is controlled by opts the same way as in MigrateProject.
+// items or overwrite) is controlled by opts the same way as in MigrateProject.
 func MigrateProjectTo(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProjectNumber, dstProjectNumber int, opts *MigrateOptions) (*gh.ProjectV2, error) {
 	srcProject, err := gh.GetProjectV2ByNumber(ctx, src, srcOwner, srcProjectNumber)
 	if err != nil {
@@ -356,11 +323,12 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcHost
 	if err != nil {
 		return nil, err
 	}
-	if opts != nil && opts.PruneItems {
-		if err := pruneProjectItems(ctx, dst, srcHost, srcOwner, srcProjectNumber, dstCtx); err != nil {
-			return nil, err
-		}
-	}
+	return migrateItems(ctx, dst, srcHost, srcOwner, srcProjectNumber, srcItems, dstCtx, opts)
+}
+
+// migrateItems migrates every source item into the destination project and then restores
+// the source item order. Returns the destination items in source order.
+func migrateItems(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, srcItems []gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) ([]*gh.ProjectV2Item, error) {
 	var results []*gh.ProjectV2Item
 	for i := range srcItems {
 		item, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProjectNumber, &srcItems[i], dstCtx, opts)
@@ -371,7 +339,25 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcHost
 			results = append(results, item)
 		}
 	}
+	applyItemOrder(ctx, dst, dstCtx.projectID, results)
 	return results, nil
+}
+
+// applyItemOrder repositions destination items so that they follow the source item order.
+// Archived items are skipped because they cannot be repositioned.
+func applyItemOrder(ctx context.Context, dst *gh.GitHubClient, projectID string, items []*gh.ProjectV2Item) {
+	var afterID *string
+	for _, item := range items {
+		if item.IsArchived {
+			continue
+		}
+		if err := gh.MoveProjectV2Item(ctx, dst, projectID, item.ID, afterID); err != nil {
+			logger.Warn("failed to restore item order", "title", item.Content.Title, "itemID", item.ID, "error", err)
+			return
+		}
+		id := item.ID
+		afterID = &id
+	}
 }
 
 // updateProjectMetadata sets the description, readme (with migration marker), and public flag on the destination project.
@@ -393,22 +379,216 @@ func updateProjectMetadata(ctx context.Context, dst *gh.GitHubClient, dstProject
 	return nil
 }
 
-// warnSourceViews lists views in the source project and emits a warning for each one.
-// The GitHub GraphQL API does not expose a createProjectV2View mutation, so views cannot
-// be created programmatically; users must recreate non-default views manually.
-func warnSourceViews(ctx context.Context, src *gh.GitHubClient, srcOwner string, projectNumber int) {
-	views, err := gh.ListProjectV2Views(ctx, src, srcOwner, projectNumber)
+// applyProjectClosedState aligns the destination project open/closed state with the source.
+// It must run after all content mutations because a closed project rejects them.
+func applyProjectClosedState(ctx context.Context, dst *gh.GitHubClient, dstProject *gh.ProjectV2, srcProject *gh.ProjectV2) error {
+	if dstProject.Closed == srcProject.Closed {
+		return nil
+	}
+	if _, err := gh.SetProjectV2Closed(ctx, dst, dstProject.ID, srcProject.Closed); err != nil {
+		return fmt.Errorf("failed to set closed=%t on destination project '%s': %w", srcProject.Closed, dstProject.Title, err)
+	}
+	dstProject.Closed = srcProject.Closed
+	return nil
+}
+
+// migrateStatusUpdates copies the source project status updates into the destination project.
+// Each destination status update carries a hidden marker so re-runs are idempotent: existing
+// ones are skipped, or refreshed in place when opts.Overwrite is set. Failures are reported as
+// warnings because status updates are supplementary to the project contents.
+func migrateStatusUpdates(ctx context.Context, src, dst *gh.GitHubClient, srcHost, srcOwner, dstOwner string, srcProjectNumber int, dstProject *gh.ProjectV2, opts *MigrateOptions) {
+	srcUpdates, err := gh.ListProjectV2StatusUpdates(ctx, src, srcOwner, srcProjectNumber)
+	if err != nil {
+		logger.Warn("failed to list source project status updates", "error", err)
+		return
+	}
+	if len(srcUpdates) == 0 {
+		return
+	}
+	dstUpdates, err := gh.ListProjectV2StatusUpdates(ctx, dst, dstOwner, dstProject.Number)
+	if err != nil {
+		logger.Warn("failed to list destination project status updates", "error", err)
+		return
+	}
+	for i := range srcUpdates {
+		su := &srcUpdates[i]
+		marker := migratedStatusUpdateMarker(srcHost, srcOwner, srcProjectNumber, su.ID)
+		body := statusUpdateBody(su, marker)
+		status := statusUpdateStatus(su)
+		startDate := optionalDate(su.StartDate)
+		targetDate := optionalDate(su.TargetDate)
+		if prev := findStatusUpdateByMarker(dstUpdates, marker); prev != nil {
+			if opts == nil || !opts.Overwrite {
+				logger.Info("skipping already-migrated status update", "statusUpdateID", prev.ID)
+				continue
+			}
+			if err := gh.UpdateProjectV2StatusUpdate(ctx, dst, prev.ID, &body, status, startDate, targetDate); err != nil {
+				logger.Warn("failed to overwrite migrated status update", "statusUpdateID", prev.ID, "error", err)
+			}
+			continue
+		}
+		if _, err := gh.CreateProjectV2StatusUpdate(ctx, dst, dstProject.ID, &body, status, startDate, targetDate); err != nil {
+			logger.Warn("failed to create status update in destination project", "sourceStatusUpdateID", su.ID, "error", err)
+		}
+	}
+}
+
+// findStatusUpdateByMarker returns the first status update whose body contains marker, or nil.
+func findStatusUpdateByMarker(updates []gh.ProjectV2StatusUpdate, marker string) *gh.ProjectV2StatusUpdate {
+	for i := range updates {
+		if strings.Contains(updates[i].Body, marker) {
+			return &updates[i]
+		}
+	}
+	return nil
+}
+
+// statusUpdateBody builds the destination status update body with an attribution header
+// (the creator and creation time cannot be reproduced on the destination) and the marker.
+func statusUpdateBody(su *gh.ProjectV2StatusUpdate, marker string) string {
+	creator := su.Creator
+	if creator == "" {
+		creator = "unknown"
+	}
+	header := fmt.Sprintf("> *Originally posted by @%s \u2014 %s*", creator, su.CreatedAt)
+	return header + "\n\n" + su.Body + "\n\n" + marker
+}
+
+// statusUpdateStatus returns the status to apply, or nil when the source has none.
+func statusUpdateStatus(su *gh.ProjectV2StatusUpdate) *gh.ProjectV2StatusUpdateStatus {
+	if su.Status == "" {
+		return nil
+	}
+	s := su.Status
+	return &s
+}
+
+// optionalDate returns a pointer to date, or nil when it is empty.
+func optionalDate(date string) *string {
+	if date == "" {
+		return nil
+	}
+	return &date
+}
+
+// migrateViews recreates the source project views in the destination project through the
+// Project views REST API. Views are matched by name and existing ones are left untouched
+// because there is no view update endpoint. Destination views that do not exist in the
+// source (such as the default view of a newly created project) are removed afterwards.
+// Field references are resolved by field name.
+func migrateViews(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, srcProjectNumber int, dstProject *gh.ProjectV2, dstFieldByName map[string]*gh.ProjectV2Field) {
+	srcViews, err := gh.ListProjectV2Views(ctx, src, srcOwner, srcProjectNumber)
 	if err != nil {
 		logger.Warn("failed to list source project views", "error", err)
 		return
 	}
-	if len(views) == 0 {
+	if len(srcViews) == 0 {
 		return
 	}
-	logger.Warn("views cannot be migrated automatically due to a GitHub API limitation; please recreate them manually in the destination project")
-	for _, v := range views {
-		logger.Warn("source view", "name", v.Name, "layout", v.Layout)
+	dstViews, err := gh.ListProjectV2Views(ctx, dst, dstOwner, dstProject.Number)
+	if err != nil {
+		logger.Warn("failed to list destination project views", "error", err)
+		return
 	}
+	existing := make(map[string]bool, len(dstViews))
+	for _, v := range dstViews {
+		existing[v.Name] = true
+	}
+	srcNames := make(map[string]bool, len(srcViews))
+	for i := range srcViews {
+		v := &srcViews[i]
+		srcNames[v.Name] = true
+		if existing[v.Name] {
+			logger.Info("skipping existing view", "name", v.Name)
+			continue
+		}
+		input := gh.ProjectV2ViewInput{
+			Name:                    v.Name,
+			Layout:                  v.Layout,
+			Filter:                  v.Filter,
+			VisibleFieldIDs:         resolveFieldIDs(dstFieldByName, v.VisibleFields),
+			GroupByFieldIDs:         resolveFieldIDs(dstFieldByName, v.GroupByFields),
+			VerticalGroupByFieldIDs: resolveFieldIDs(dstFieldByName, v.VerticalGroupByFields),
+		}
+		for _, s := range v.SortBy {
+			f, ok := dstFieldByName[s.FieldName]
+			if !ok || f.DatabaseID == 0 {
+				continue
+			}
+			input.SortBy = append(input.SortBy, gh.ProjectV2ViewSortByInput{FieldID: f.DatabaseID, Direction: s.Direction})
+		}
+		if _, err := gh.CreateProjectV2View(ctx, dst, dstOwner, dstProject.Number, input); err != nil {
+			logger.Warn("failed to create view in destination project", "name", v.Name, "layout", v.Layout, "error", err)
+			continue
+		}
+		logger.Info("created view", "name", v.Name, "layout", v.Layout)
+	}
+	// Delete destination-only views after the source views exist, because a project
+	// must always keep at least one view.
+	for i := range dstViews {
+		v := &dstViews[i]
+		if srcNames[v.Name] {
+			continue
+		}
+		if err := gh.DeleteProjectV2View(ctx, dst, v.ID); err != nil {
+			logger.Warn("failed to delete view missing in the source project", "name", v.Name, "error", err)
+			continue
+		}
+		logger.Info("deleted view missing in the source project", "name", v.Name)
+	}
+}
+
+// reportWorkflows warns about built-in automations that must be re-enabled by hand. The GraphQL
+// API exposes only a workflow's name and enabled flag, and offers no create or update mutation.
+func reportWorkflows(ctx context.Context, src, dst *gh.GitHubClient, srcOwner, dstOwner string, srcProjectNumber int, dstProject *gh.ProjectV2) {
+	srcWorkflows, err := gh.ListProjectV2Workflows(ctx, src, srcOwner, srcProjectNumber)
+	if err != nil {
+		logger.Warn("failed to list source project workflows", "error", err)
+		return
+	}
+	var enabled []string
+	for _, w := range srcWorkflows {
+		if w.Enabled {
+			enabled = append(enabled, w.Name)
+		}
+	}
+	if len(enabled) == 0 {
+		return
+	}
+	dstEnabled := make(map[string]bool)
+	dstWorkflows, err := gh.ListProjectV2Workflows(ctx, dst, dstOwner, dstProject.Number)
+	if err != nil {
+		logger.Warn("failed to list destination project workflows", "error", err)
+	} else {
+		for _, w := range dstWorkflows {
+			dstEnabled[w.Name] = w.Enabled
+		}
+	}
+	var missing []string
+	for _, name := range enabled {
+		if !dstEnabled[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	logger.Warn("workflows cannot be migrated because the API provides no way to create or enable them; enable them manually in the destination project settings",
+		"workflows", strings.Join(missing, ", "), "url", dstProject.URL)
+}
+
+// resolveFieldIDs maps source field names to the REST field IDs of the destination project,
+// dropping names that have no destination counterpart.
+func resolveFieldIDs(dstFieldByName map[string]*gh.ProjectV2Field, names []string) []int64 {
+	var ids []int64
+	for _, name := range names {
+		f, ok := dstFieldByName[name]
+		if !ok || f.DatabaseID == 0 {
+			continue
+		}
+		ids = append(ids, f.DatabaseID)
+	}
+	return ids
 }
 
 // createProjectFields creates all migratable custom fields from srcFields in the destination project.
@@ -432,6 +612,12 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 			continue
 		}
 		if existingByName[f.Name] {
+			if err := syncSingleSelectOptions(ctx, dst, dstFieldByName[f.Name], f); err != nil {
+				return dstFieldByName, err
+			}
+			if err := syncIterations(ctx, dst, dstFieldByName[f.Name], f); err != nil {
+				return dstFieldByName, err
+			}
 			continue
 		}
 		dataType := f.DataType
@@ -443,7 +629,7 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 			dataType = "TEXT"
 		}
 		if dataType == "ITERATION" {
-			if err := gh.CreateProjectV2IterationField(ctx, dst, string(dstProject.ID), f.Name, f.Iterations); err != nil {
+			if err := gh.CreateProjectV2IterationField(ctx, dst, string(dstProject.ID), f.Name, f.AllIterations()); err != nil {
 				return dstFieldByName, fmt.Errorf("failed to create iteration field '%s' in destination project '%s': %w", f.Name, string(dstProject.Title), err)
 			}
 			continue
@@ -464,6 +650,110 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 	return dstFieldByName, nil
 }
 
+// syncSingleSelectOptions aligns the options of an existing destination SINGLE_SELECT field with
+// the source field. Source options are placed first in source order so that board layout columns
+// keep the same order as the source project, and destination-only options are appended afterwards
+// because the update mutation replaces the whole option list. Options matched by name keep their
+// destination ID so existing item values are not lost.
+func syncSingleSelectOptions(ctx context.Context, dst *gh.GitHubClient, dstField *gh.ProjectV2Field, srcField gh.ProjectV2Field) error {
+	if dstField == nil || dstField.DataType != "SINGLE_SELECT" || srcField.DataType != "SINGLE_SELECT" || len(srcField.Options) == 0 {
+		return nil
+	}
+	dstByName := make(map[string]gh.ProjectV2SingleSelectOption, len(dstField.Options))
+	for _, o := range dstField.Options {
+		dstByName[o.Name] = o
+	}
+	srcByName := make(map[string]bool, len(srcField.Options))
+	merged := make([]gh.ProjectV2SingleSelectOption, 0, len(dstField.Options)+len(srcField.Options))
+	for _, s := range srcField.Options {
+		srcByName[s.Name] = true
+		o := s
+		if d, ok := dstByName[s.Name]; ok {
+			// Keep the destination option ID so already assigned item values stay valid.
+			o.ID = d.ID
+		} else {
+			// Clear the source option ID so the destination assigns a new one.
+			o.ID = ""
+		}
+		merged = append(merged, o)
+	}
+	for _, d := range dstField.Options {
+		if srcByName[d.Name] {
+			continue
+		}
+		merged = append(merged, d)
+	}
+	if singleSelectOptionsEqual(dstField.Options, merged) {
+		return nil
+	}
+	if err := gh.UpdateProjectV2FieldSingleSelectOptions(ctx, dst, dstField.ID, merged); err != nil {
+		return fmt.Errorf("failed to update options of single select field '%s' in destination project: %w", dstField.Name, err)
+	}
+	dstField.Options = merged
+	return nil
+}
+
+// singleSelectOptionsEqual reports whether two option lists match in order, name, color and description.
+func singleSelectOptionsEqual(a, b []gh.ProjectV2SingleSelectOption) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Color != b[i].Color || a[i].Description != b[i].Description {
+			return false
+		}
+	}
+	return true
+}
+
+// syncIterations aligns the iterations of an existing destination ITERATION field with the source
+// field. Source iterations are merged with destination-only ones and ordered by start date, so
+// past sprints of the source project are reproduced. The iteration input carries no ID, so the
+// destination reassigns iteration IDs on every update.
+func syncIterations(ctx context.Context, dst *gh.GitHubClient, dstField *gh.ProjectV2Field, srcField gh.ProjectV2Field) error {
+	if dstField == nil || dstField.DataType != "ITERATION" || srcField.DataType != "ITERATION" {
+		return nil
+	}
+	srcIterations := srcField.AllIterations()
+	if len(srcIterations) == 0 {
+		return nil
+	}
+	dstIterations := dstField.AllIterations()
+	srcByTitle := make(map[string]bool, len(srcIterations))
+	for _, it := range srcIterations {
+		srcByTitle[it.Title] = true
+	}
+	merged := make([]gh.ProjectV2IterationOption, 0, len(srcIterations)+len(dstIterations))
+	merged = append(merged, srcIterations...)
+	for _, it := range dstIterations {
+		if srcByTitle[it.Title] {
+			continue
+		}
+		merged = append(merged, it)
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].StartDate < merged[j].StartDate })
+	if iterationsEqual(dstIterations, merged) {
+		return nil
+	}
+	if err := gh.UpdateProjectV2FieldIterations(ctx, dst, dstField.ID, merged); err != nil {
+		return fmt.Errorf("failed to update iterations of iteration field '%s' in destination project: %w", dstField.Name, err)
+	}
+	return nil
+}
+
+// iterationsEqual reports whether two iteration lists match in order, title, start date and duration.
+func iterationsEqual(a, b []gh.ProjectV2IterationOption) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Title != b[i].Title || a[i].StartDate != b[i].StartDate || a[i].Duration != b[i].Duration {
+			return false
+		}
+	}
+	return true
+}
+
 // migrateItem migrates a single source item into the destination project.
 // When opts.IssueRepo is set, it first searches for an existing issue with the migration
 // marker in that repository and links it. If no issue is found and opts.CreateIssue is true,
@@ -477,6 +767,7 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 	if prev := findItemByMarker(dstCtx.items, marker); prev != nil {
 		if opts == nil || !opts.Overwrite {
 			logger.Info("skipping already-migrated item", "title", prev.Content.Title, "itemID", prev.ID)
+			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
 			return prev, nil
 		}
 		if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, prev.ID); err != nil {
@@ -544,9 +835,28 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 			Title: title,
 			Body:  body,
 		},
+		IsArchived: srcItem.IsArchived,
 	}
 	dstCtx.items = append(dstCtx.items, *result)
 	return result, nil
+}
+
+// syncItemArchiveState aligns the archive state of an already-migrated destination item with the source.
+func syncItemArchiveState(ctx context.Context, dst *gh.GitHubClient, projectID string, item *gh.ProjectV2Item, archived bool) {
+	if item.IsArchived == archived {
+		return
+	}
+	var err error
+	if archived {
+		err = gh.ArchiveProjectV2Item(ctx, dst, projectID, item.ID)
+	} else {
+		err = gh.UnarchiveProjectV2Item(ctx, dst, projectID, item.ID)
+	}
+	if err != nil {
+		logger.Warn("failed to sync item archive state", "title", item.Content.Title, "itemID", item.ID, "archived", archived, "error", err)
+		return
+	}
+	item.IsArchived = archived
 }
 
 // itemDraftContent returns the title and body for a migrated draft issue.
@@ -612,7 +922,8 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 		return nil
 	case "ITERATION":
 		// Match by iteration title to find the corresponding destination iteration ID.
-		for _, it := range dstField.Iterations {
+		// Past sprints live in the completed iterations, so both lists are searched.
+		for _, it := range dstField.AllIterations() {
 			if it.Title == fv.IterationTitle {
 				return gh.SetProjectV2ItemIterationValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, it.ID)
 			}

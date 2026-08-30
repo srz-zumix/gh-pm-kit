@@ -112,10 +112,28 @@ func diffProjectFields(srcFields, dstFields []gh.ProjectV2Field) []render.Projec
 	return diffs
 }
 
-// projectFieldsEqual reports whether two project fields have the same type and option names.
+// projectFieldsEqual reports whether two project fields have the same type, option names and iteration titles.
 func projectFieldsEqual(a, b *gh.ProjectV2Field) bool {
 	if a.DataType != b.DataType {
 		return false
+	}
+	if a.DataType == "ITERATION" {
+		aIterations := a.AllIterations()
+		bIterations := b.AllIterations()
+		if len(aIterations) != len(bIterations) {
+			return false
+		}
+		titles := make(map[string]int, len(aIterations))
+		for i := range aIterations {
+			titles[aIterations[i].Title]++
+		}
+		for i := range bIterations {
+			title := bIterations[i].Title
+			if titles[title] == 0 {
+				return false
+			}
+			titles[title]--
+		}
 	}
 	if a.DataType == "SINGLE_SELECT" {
 		if len(a.Options) != len(b.Options) {
