@@ -128,10 +128,11 @@ type dstProjectContext struct {
 	projectID string
 	// fieldByName maps destination field name to field for quick lookup.
 	fieldByName map[string]*gh.ProjectV2Field
-	// items holds all existing draft-issue items in the destination project.
+	// items holds every existing item of the destination project as returned by
+	// ListProjectV2Items (draft issues, issues, and pull requests).
 	items []gh.ProjectV2Item
-	// itemByContentKey maps an issue/pull-request content key to the ID of the project item
-	// that already links it, so re-runs reuse the link instead of creating a duplicate.
+	// itemByContentKey maps an issue/pull-request content key ("owner/repo#number") to the ID of
+	// the project item that already links it, so re-runs reuse the link instead of creating a duplicate.
 	itemByContentKey map[string]string
 }
 
@@ -144,17 +145,34 @@ func newDstProjectContext(projectID string, fieldByName map[string]*gh.ProjectV2
 	}
 }
 
-// itemContentKey returns the lookup key of an issue or pull request item, or "" when the item
-// carries no usable repository information. Only the repository name and number are used because
-// the owner differs between the source and the destination.
-func itemContentKey(c *gh.ProjectV2ItemContent) string {
+// isLinkableContent reports whether the content is an issue or pull request that carries a usable
+// repository name and number, so it can participate in content-based linking and deduplication.
+func isLinkableContent(c *gh.ProjectV2ItemContent) bool {
 	if c.Type != gh.ProjectV2ItemTypeIssue && c.Type != gh.ProjectV2ItemTypePullRequest {
+		return false
+	}
+	return c.RepoName != "" && c.Number != 0
+}
+
+// itemContentKey returns the identity key "owner/repo#number" (lowercased) of an existing
+// destination issue or pull request item, or "" when the item is not linkable or its owner is
+// unknown. The owner is included so items from repositories that share a name and number under
+// different owners never collide in itemByContentKey.
+func itemContentKey(c *gh.ProjectV2ItemContent) string {
+	if !isLinkableContent(c) || c.RepoOwner == "" {
 		return ""
 	}
-	if c.RepoName == "" || c.Number == 0 {
+	return strings.ToLower(c.RepoOwner+"/"+c.RepoName) + "#" + strconv.Itoa(c.Number)
+}
+
+// expectedDstContentKey returns the identity key the destination copy of a source item is expected
+// to have: the source repository name and number under dstOwner. Migration mirrors <owner>/repo#N
+// from the source to dstOwner/repo#N in the destination, so the source owner is deliberately ignored.
+func expectedDstContentKey(dstOwner string, c *gh.ProjectV2ItemContent) string {
+	if !isLinkableContent(c) {
 		return ""
 	}
-	return strings.ToLower(c.RepoName) + "#" + strconv.Itoa(c.Number)
+	return strings.ToLower(dstOwner+"/"+c.RepoName) + "#" + strconv.Itoa(c.Number)
 }
 
 // addItem caches a destination item and indexes it by content key when it links an issue or PR.
@@ -838,7 +856,7 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 	}
 	// An issue or pull request that is already linked to the destination project is reused as is.
 	// The link is never deleted, because the content is owned by the destination repository.
-	if key := itemContentKey(&srcItem.Content); key != "" {
+	if key := expectedDstContentKey(dstOwner, &srcItem.Content); key != "" {
 		if prev := dstCtx.findItemByID(dstCtx.itemByContentKey[key]); prev != nil {
 			if opts != nil && opts.Overwrite {
 				applyItemFieldValues(ctx, dst, dstCtx, prev.ID, prev.Content.Type, srcItem.FieldValues)
@@ -948,7 +966,7 @@ func applyItemFieldValues(ctx context.Context, dst *gh.GitHubClient, dstCtx *dst
 // repository name and number as the source item. It returns "" when no content of the same type
 // exists, so the caller can fall back to creating a new issue or a draft issue.
 func resolveDstContentNodeID(ctx context.Context, dst *gh.GitHubClient, dstOwner string, content *gh.ProjectV2ItemContent) string {
-	if itemContentKey(content) == "" {
+	if !isLinkableContent(content) {
 		return ""
 	}
 	repo := repository.Repository{Owner: dstOwner, Name: content.RepoName}
