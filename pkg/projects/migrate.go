@@ -849,6 +849,15 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
 			return prev, nil
 		}
+		// A draft issue is owned by the project, so overwrite deletes and recreates it.
+		// An issue or pull request is external content: keep the link and only re-apply its
+		// field values, matching the content-key reuse path and the documented invariant that
+		// items linked to existing issues or pull requests are never deleted on overwrite.
+		if prev.Content.Type != gh.ProjectV2ItemTypeDraftIssue {
+			applyItemFieldValues(ctx, dst, dstCtx, prev.ID, prev.Content.Type, srcItem.FieldValues)
+			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
+			return prev, nil
+		}
 		if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, prev.ID); err != nil {
 			return nil, fmt.Errorf("failed to delete existing item '%s' for overwrite: %w", prev.Content.Title, err)
 		}
