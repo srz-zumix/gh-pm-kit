@@ -711,7 +711,8 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 			continue
 		}
 		if dataType == "MULTI_SELECT" {
-			// The destination may run a GitHub version without multi-select support, so keep
+			// If creating a MULTI_SELECT field fails for any reason (for example, the destination
+			// runs a GitHub version without multi-select support), skip it with a warning and keep
 			// migrating the remaining fields instead of aborting the whole migration.
 			if err := gh.CreateProjectV2MultiSelectField(ctx, dst, string(dstProject.ID), f.Name, f.Options); err != nil {
 				logger.Warn("failed to create multi select field; skipping it", "field", f.Name, "error", err)
@@ -900,8 +901,11 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 		// Search for an existing issue that carries the migration marker.
 		issues, err := gh.SearchIssues(ctx, dst, *opts.IssueRepo, fmt.Sprintf("%q", marker))
 		if err != nil {
-			logger.Warn("failed to search issues for migration marker", "error", err)
-		} else if len(issues) > 0 {
+			// Fail fast: a search failure means we cannot tell whether a marker issue already
+			// exists, so falling through could link the wrong content or create a duplicate.
+			return nil, fmt.Errorf("failed to search issues for migration marker in repository '%s/%s': %w", opts.IssueRepo.Owner, opts.IssueRepo.Name, err)
+		}
+		if len(issues) > 0 {
 			// Link the first matching issue to the project.
 			id, err := gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, issues[0].GetNodeID())
 			if err != nil {

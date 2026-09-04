@@ -386,7 +386,7 @@ Options of an existing destination SINGLE_SELECT or MULTI_SELECT field are align
 missing options are added, the color/description of matching options are refreshed, and source options
 are reordered to match the source so board layout columns keep the same order. Destination-only options
 are appended at the end.
-MULTI_SELECT fields are skipped with a warning when the destination GitHub version does not support them.
+MULTI_SELECT fields are skipped with a warning if their creation fails (for example, when the destination GitHub version does not support them).
 ITERATION fields are recreated with both their past and current iterations, so sprints already completed
 in the source project are reproduced.
 Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views

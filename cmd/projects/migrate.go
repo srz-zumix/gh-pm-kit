@@ -28,7 +28,8 @@ func NewMigrateCmd() *cobra.Command {
 			"archive state, and status updates are copied to the destination owner.\n" +
 			"SINGLE_SELECT and MULTI_SELECT options are aligned with the source, including\n" +
 			"their order, so board layout columns match. MULTI_SELECT is skipped with a\n" +
-			"warning when the destination GitHub version does not support it.\n" +
+			"warning if its creation fails (e.g. the destination GitHub version does not\n" +
+			"support it).\n" +
 			"ITERATION fields keep their past and current iterations.\n" +
 			"Views are recreated with their layout, filter, visible fields, sorting, and\n" +
 			"grouping; destination views with the same name are left untouched, and\n" +

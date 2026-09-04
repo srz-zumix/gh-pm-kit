@@ -189,7 +189,7 @@ gh pm-kit projects diff <src-number|src-URL> <dst-number|dst-URL> [flags]
 Migrate a GitHub Project v2 (New Projects) from one owner to another.
 Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, MULTI_SELECT, ITERATION), views, items, item order, item archive state, and status updates.
 Options of an existing destination SINGLE_SELECT or MULTI_SELECT field are aligned with the source: missing options are added, the color/description of matching options are refreshed, and source options are reordered to match the source so board layout columns keep the same order. Destination-only options are appended at the end.
-MULTI_SELECT fields are skipped with a warning when the destination GitHub version does not support them, so the rest of the migration still completes.
+MULTI_SELECT fields are skipped with a warning if their creation fails (for example, when the destination GitHub version does not support them), so the rest of the migration still completes.
 ITERATION fields are recreated with both their past and current iterations, so sprints already completed in the source project are reproduced.
 Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views with the same name are left untouched because the API has no view update endpoint, and destination views that do not exist in the source (such as the default view of a newly created project) are deleted.
 Built-in workflows (automations) are not migrated: the API exposes only their name and enabled flag and offers no way to create or enable one. Enabled source workflows that are disabled in the destination are reported as a warning so they can be enabled manually.
