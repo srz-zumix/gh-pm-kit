@@ -1093,29 +1093,39 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 		}
 		return gh.SetProjectV2ItemDateValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, fv.Date)
 	case "SINGLE_SELECT":
-		// If the destination field was converted to TEXT (no options available at source), store the name as text.
-		if dstField.DataType == "TEXT" {
+		switch dstField.DataType {
+		case "TEXT":
+			// The source select field had no options and was created as TEXT; store the name as text.
 			return gh.SetProjectV2ItemTextValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, fv.SelectName)
-		}
-		for _, opt := range dstField.Options {
-			if opt.Name == fv.SelectName {
-				return gh.SetProjectV2ItemSingleSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, opt.ID)
+		case "SINGLE_SELECT":
+			for _, opt := range dstField.Options {
+				if opt.Name == fv.SelectName {
+					return gh.SetProjectV2ItemSingleSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, opt.ID)
+				}
 			}
+			return nil
+		default:
+			// A destination field of the same name has an incompatible type; skip to avoid API errors.
+			return nil
 		}
-		return nil
 	case "MULTI_SELECT":
 		if len(fv.SelectNames) == 0 {
 			return nil
 		}
-		// If the destination field was converted to TEXT (no options available at source), store the names as text.
-		if dstField.DataType == "TEXT" {
+		switch dstField.DataType {
+		case "TEXT":
+			// The source select field had no options and was created as TEXT; store the names as text.
 			return gh.SetProjectV2ItemTextValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, strings.Join(fv.SelectNames, ", "))
-		}
-		optionIDs := resolveMultiSelectOptionIDs(dstField.Options, fv.SelectNames)
-		if len(optionIDs) == 0 {
+		case "MULTI_SELECT":
+			optionIDs := resolveMultiSelectOptionIDs(dstField.Options, fv.SelectNames)
+			if len(optionIDs) == 0 {
+				return nil
+			}
+			return gh.SetProjectV2ItemMultiSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, optionIDs)
+		default:
+			// A destination field of the same name has an incompatible type; skip to avoid API errors.
 			return nil
 		}
-		return gh.SetProjectV2ItemMultiSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, optionIDs)
 	case "ITERATION":
 		// Match by iteration title to find the corresponding destination iteration ID.
 		// Past sprints live in the completed iterations, so both lists are searched.

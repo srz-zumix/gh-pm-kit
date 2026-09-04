@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"context"
 	"testing"
 
 	"github.com/srz-zumix/go-gh-extension/pkg/gh"
@@ -154,5 +155,46 @@ func TestResolveMultiSelectOptionIDs(t *testing.T) {
 	// No matches yields an empty slice.
 	if got = resolveMultiSelectOptionIDs(options, []string{"Nope"}); len(got) != 0 {
 		t.Fatalf("expected empty result, got %v", got)
+	}
+}
+
+// TestSetFieldValueSkipsIncompatibleSelectType verifies that a source select value whose
+// same-name destination field has an incompatible select type is skipped before any API call,
+// preventing mutation requests that the API would reject.
+func TestSetFieldValueSkipsIncompatibleSelectType(t *testing.T) {
+	cases := []struct {
+		name    string
+		dstType string
+		fv      gh.ProjectV2FieldValue
+	}{
+		{
+			name:    "multi-select value into single-select field",
+			dstType: "SINGLE_SELECT",
+			fv: gh.ProjectV2FieldValue{
+				FieldName:   "Labels",
+				ValueType:   "MULTI_SELECT",
+				SelectNames: []string{"Bug"},
+			},
+		},
+		{
+			name:    "single-select value into multi-select field",
+			dstType: "MULTI_SELECT",
+			fv: gh.ProjectV2FieldValue{
+				FieldName:  "Labels",
+				ValueType:  "SINGLE_SELECT",
+				SelectName: "Bug",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dstCtx := newDstProjectContext("proj", map[string]*gh.ProjectV2Field{
+				"Labels": {Name: "Labels", DataType: tc.dstType},
+			})
+			// dst is nil: the skip path must return before dereferencing the client.
+			if err := setFieldValue(context.Background(), nil, dstCtx, "item1", gh.ProjectV2ItemTypeDraftIssue, tc.fv); err != nil {
+				t.Fatalf("expected nil error on skip path, got %v", err)
+			}
+		})
 	}
 }
