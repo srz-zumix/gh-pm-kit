@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,19 +128,96 @@ type dstProjectContext struct {
 	projectID string
 	// fieldByName maps destination field name to field for quick lookup.
 	fieldByName map[string]*gh.ProjectV2Field
-	// items holds all existing draft-issue items in the destination project.
+	// items holds every existing item of the destination project as returned by
+	// ListProjectV2Items (draft issues, issues, and pull requests).
 	items []gh.ProjectV2Item
+	// itemByContentKey maps an issue/pull-request content key ("owner/repo#number") to the ID of
+	// the project item that already links it, so re-runs reuse the link instead of creating a duplicate.
+	itemByContentKey map[string]string
+	// itemByID maps a project item ID to its index in items for O(1) lookup and removal.
+	itemByID map[string]int
 }
 
-// removeItem removes an item by ID from the cached items slice.
+// newDstProjectContext creates an empty context for the given destination project.
+func newDstProjectContext(projectID string, fieldByName map[string]*gh.ProjectV2Field) *dstProjectContext {
+	return &dstProjectContext{
+		projectID:        projectID,
+		fieldByName:      fieldByName,
+		itemByContentKey: make(map[string]string),
+		itemByID:         make(map[string]int),
+	}
+}
+
+// isLinkableContent reports whether the content is an issue or pull request that carries a usable
+// repository name and number, so it can participate in content-based linking and deduplication.
+func isLinkableContent(c *gh.ProjectV2ItemContent) bool {
+	if c.Type != gh.ProjectV2ItemTypeIssue && c.Type != gh.ProjectV2ItemTypePullRequest {
+		return false
+	}
+	return c.RepoName != "" && c.Number != 0
+}
+
+// itemContentKey returns the identity key "owner/repo#number" (lowercased) of an existing
+// destination issue or pull request item, or "" when the item is not linkable or its owner is
+// unknown. The owner is included so items from repositories that share a name and number under
+// different owners never collide in itemByContentKey.
+func itemContentKey(c *gh.ProjectV2ItemContent) string {
+	if !isLinkableContent(c) || c.RepoOwner == "" {
+		return ""
+	}
+	return strings.ToLower(c.RepoOwner+"/"+c.RepoName) + "#" + strconv.Itoa(c.Number)
+}
+
+// expectedDstContentKey returns the identity key the destination copy of a source item is expected
+// to have: the source repository name and number under dstOwner. Migration mirrors <owner>/repo#N
+// from the source to dstOwner/repo#N in the destination, so the source owner is deliberately ignored.
+func expectedDstContentKey(dstOwner string, c *gh.ProjectV2ItemContent) string {
+	if !isLinkableContent(c) {
+		return ""
+	}
+	return strings.ToLower(dstOwner+"/"+c.RepoName) + "#" + strconv.Itoa(c.Number)
+}
+
+// addItem caches a destination item and indexes it by ID and, when it links an issue or PR, by content key.
+func (c *dstProjectContext) addItem(item gh.ProjectV2Item) {
+	c.items = append(c.items, item)
+	if item.ID != "" {
+		c.itemByID[item.ID] = len(c.items) - 1
+	}
+	if key := itemContentKey(&item.Content); key != "" {
+		c.itemByContentKey[key] = item.ID
+	}
+}
+
+// findItemByID returns a pointer to the cached item with the given ID, or nil.
+func (c *dstProjectContext) findItemByID(itemID string) *gh.ProjectV2Item {
+	if idx, ok := c.itemByID[itemID]; ok {
+		return &c.items[idx]
+	}
+	return nil
+}
+
+// removeItem removes an item by ID from the cached items slice and both indexes.
 func (c *dstProjectContext) removeItem(itemID string) {
-	for i := range c.items {
-		if c.items[i].ID == itemID {
-			c.items[i] = c.items[len(c.items)-1]
-			c.items = c.items[:len(c.items)-1]
-			return
+	idx, ok := c.itemByID[itemID]
+	if !ok {
+		return
+	}
+	last := len(c.items) - 1
+	removed := c.items[idx]
+	delete(c.itemByID, itemID)
+	if key := itemContentKey(&removed.Content); key != "" {
+		delete(c.itemByContentKey, key)
+	}
+	// Move the last item into the freed slot and reindex it, unless the removed item was last.
+	if idx != last {
+		moved := c.items[last]
+		c.items[idx] = moved
+		if moved.ID != "" {
+			c.itemByID[moved.ID] = idx
 		}
 	}
+	c.items = c.items[:last]
 }
 
 // findItemByMarker returns a pointer to the first draft-issue or issue item whose body
@@ -174,11 +252,11 @@ func prepareDstContext(ctx context.Context, dst *gh.GitHubClient, dstOwner strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to list items for destination project #%d of '%s': %w", dstProjectNumber, dstOwner, err)
 	}
-	return &dstProjectContext{
-		projectID:   string(project.ID),
-		fieldByName: fieldByName,
-		items:       items,
-	}, nil
+	dstCtx := newDstProjectContext(string(project.ID), fieldByName)
+	for i := range items {
+		dstCtx.addItem(items[i])
+	}
+	return dstCtx, nil
 }
 
 // migratableDataTypes are the field data types that can be migrated.
@@ -187,6 +265,7 @@ var migratableDataTypes = map[string]bool{
 	"NUMBER":        true,
 	"DATE":          true,
 	"SINGLE_SELECT": true,
+	"MULTI_SELECT":  true,
 	"ITERATION":     true,
 }
 
@@ -239,11 +318,8 @@ func MigrateProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost, src
 	}
 	migrateViews(ctx, src, dst, srcOwner, dstOwner, projectNumber, dstProject, dstFieldByName)
 	reportWorkflows(ctx, src, dst, srcOwner, dstOwner, projectNumber, dstProject)
-	dstCtx := &dstProjectContext{
-		projectID:   string(dstProject.ID),
-		fieldByName: dstFieldByName,
-	}
-	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, projectNumber, srcItems, dstCtx, opts); err != nil {
+	dstCtx := newDstProjectContext(string(dstProject.ID), dstFieldByName)
+	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, projectNumber, dstOwner, srcItems, dstCtx, opts); err != nil {
 		return dstProject, err
 	}
 	migrateStatusUpdates(ctx, src, dst, srcHost, srcOwner, dstOwner, projectNumber, dstProject, opts)
@@ -278,7 +354,7 @@ func migrateIntoProject(ctx context.Context, src, dst *gh.GitHubClient, srcHost,
 	migrateViews(ctx, src, dst, srcOwner, dstOwner, srcProject.Number, prev, dstFieldByName)
 	reportWorkflows(ctx, src, dst, srcOwner, dstOwner, srcProject.Number, prev)
 	dstCtx.fieldByName = dstFieldByName
-	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, srcProject.Number, srcItems, dstCtx, opts); err != nil {
+	if _, err := migrateItems(ctx, dst, srcHost, srcOwner, srcProject.Number, dstOwner, srcItems, dstCtx, opts); err != nil {
 		return prev, err
 	}
 	migrateStatusUpdates(ctx, src, dst, srcHost, srcOwner, dstOwner, srcProject.Number, prev, opts)
@@ -323,15 +399,15 @@ func MigrateProjectItems(ctx context.Context, src, dst *gh.GitHubClient, srcHost
 	if err != nil {
 		return nil, err
 	}
-	return migrateItems(ctx, dst, srcHost, srcOwner, srcProjectNumber, srcItems, dstCtx, opts)
+	return migrateItems(ctx, dst, srcHost, srcOwner, srcProjectNumber, dstOwner, srcItems, dstCtx, opts)
 }
 
 // migrateItems migrates every source item into the destination project and then restores
 // the source item order. Returns the destination items in source order.
-func migrateItems(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, srcItems []gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) ([]*gh.ProjectV2Item, error) {
+func migrateItems(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, dstOwner string, srcItems []gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) ([]*gh.ProjectV2Item, error) {
 	var results []*gh.ProjectV2Item
 	for i := range srcItems {
-		item, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProjectNumber, &srcItems[i], dstCtx, opts)
+		item, err := migrateItem(ctx, dst, srcHost, srcOwner, srcProjectNumber, dstOwner, &srcItems[i], dstCtx, opts)
 		if err != nil {
 			return results, err
 		}
@@ -612,7 +688,7 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 			continue
 		}
 		if existingByName[f.Name] {
-			if err := syncSingleSelectOptions(ctx, dst, dstFieldByName[f.Name], f); err != nil {
+			if err := syncSelectOptions(ctx, dst, dstFieldByName[f.Name], f); err != nil {
 				return dstFieldByName, err
 			}
 			if err := syncIterations(ctx, dst, dstFieldByName[f.Name], f); err != nil {
@@ -621,16 +697,25 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 			continue
 		}
 		dataType := f.DataType
-		if dataType == "SINGLE_SELECT" && len(f.Options) == 0 {
-			// A SINGLE_SELECT field without options cannot be created (API requires at least one option).
+		if (dataType == "SINGLE_SELECT" || dataType == "MULTI_SELECT") && len(f.Options) == 0 {
+			// A select field without options cannot be created (API requires at least one option).
 			// This can happen when the field is a built-in type on some GitHub Enterprise Server versions.
 			// Fall back to TEXT so the option name can still be stored as plain text.
-			logger.Info("converting SINGLE_SELECT field with no options to TEXT", "field", f.Name)
+			logger.Info("converting select field with no options to TEXT", "field", f.Name, "dataType", dataType)
 			dataType = "TEXT"
 		}
 		if dataType == "ITERATION" {
 			if err := gh.CreateProjectV2IterationField(ctx, dst, string(dstProject.ID), f.Name, f.AllIterations()); err != nil {
 				return dstFieldByName, fmt.Errorf("failed to create iteration field '%s' in destination project '%s': %w", f.Name, string(dstProject.Title), err)
+			}
+			continue
+		}
+		if dataType == "MULTI_SELECT" {
+			// If creating a MULTI_SELECT field fails for any reason (for example, the destination
+			// runs a GitHub version without multi-select support), skip it with a warning and keep
+			// migrating the remaining fields instead of aborting the whole migration.
+			if err := gh.CreateProjectV2MultiSelectField(ctx, dst, string(dstProject.ID), f.Name, f.Options); err != nil {
+				logger.Warn("failed to create multi select field; skipping it", "field", f.Name, "error", err)
 			}
 			continue
 		}
@@ -650,13 +735,16 @@ func createProjectFields(ctx context.Context, dst *gh.GitHubClient, dstOwner str
 	return dstFieldByName, nil
 }
 
-// syncSingleSelectOptions aligns the options of an existing destination SINGLE_SELECT field with
-// the source field. Source options are placed first in source order so that board layout columns
-// keep the same order as the source project, and destination-only options are appended afterwards
-// because the update mutation replaces the whole option list. Options matched by name keep their
-// destination ID so existing item values are not lost.
-func syncSingleSelectOptions(ctx context.Context, dst *gh.GitHubClient, dstField *gh.ProjectV2Field, srcField gh.ProjectV2Field) error {
-	if dstField == nil || dstField.DataType != "SINGLE_SELECT" || srcField.DataType != "SINGLE_SELECT" || len(srcField.Options) == 0 {
+// syncSelectOptions aligns the options of an existing destination SINGLE_SELECT or MULTI_SELECT
+// field with the source field. Source options are placed first in source order so that board layout
+// columns keep the same order as the source project, and destination-only options are appended
+// afterwards because the update mutation replaces the whole option list. Options matched by name
+// keep their destination ID so existing item values are not lost.
+func syncSelectOptions(ctx context.Context, dst *gh.GitHubClient, dstField *gh.ProjectV2Field, srcField gh.ProjectV2Field) error {
+	if dstField == nil || dstField.DataType != srcField.DataType || len(srcField.Options) == 0 {
+		return nil
+	}
+	if dstField.DataType != "SINGLE_SELECT" && dstField.DataType != "MULTI_SELECT" {
 		return nil
 	}
 	dstByName := make(map[string]gh.ProjectV2SingleSelectOption, len(dstField.Options))
@@ -683,18 +771,22 @@ func syncSingleSelectOptions(ctx context.Context, dst *gh.GitHubClient, dstField
 		}
 		merged = append(merged, d)
 	}
-	if singleSelectOptionsEqual(dstField.Options, merged) {
+	if selectOptionsEqual(dstField.Options, merged) {
 		return nil
 	}
-	if err := gh.UpdateProjectV2FieldSingleSelectOptions(ctx, dst, dstField.ID, merged); err != nil {
-		return fmt.Errorf("failed to update options of single select field '%s' in destination project: %w", dstField.Name, err)
+	update := gh.UpdateProjectV2FieldSingleSelectOptions
+	if dstField.DataType == "MULTI_SELECT" {
+		update = gh.UpdateProjectV2FieldMultiSelectOptions
+	}
+	if err := update(ctx, dst, dstField.ID, merged); err != nil {
+		return fmt.Errorf("failed to update options of %s field '%s' in destination project: %w", dstField.DataType, dstField.Name, err)
 	}
 	dstField.Options = merged
 	return nil
 }
 
-// singleSelectOptionsEqual reports whether two option lists match in order, name, color and description.
-func singleSelectOptionsEqual(a, b []gh.ProjectV2SingleSelectOption) bool {
+// selectOptionsEqual reports whether two option lists match in order, name, color and description.
+func selectOptionsEqual(a, b []gh.ProjectV2SingleSelectOption) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -755,10 +847,11 @@ func iterationsEqual(a, b []gh.ProjectV2IterationOption) bool {
 }
 
 // migrateItem migrates a single source item into the destination project.
-// When opts.IssueRepo is set, it first searches for an existing issue with the migration
-// marker in that repository and links it. If no issue is found and opts.CreateIssue is true,
-// a new issue is created. Otherwise the item falls back to a draft issue.
-func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, srcItem *gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) (*gh.ProjectV2Item, error) {
+// The destination content is resolved in this order: an item that already carries the migration
+// marker, an issue in opts.IssueRepo carrying the marker, the issue or pull request with the same
+// repository name and number under dstOwner, a newly created issue when opts.CreateIssue is set,
+// and finally a draft issue.
+func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner string, srcProjectNumber int, dstOwner string, srcItem *gh.ProjectV2Item, dstCtx *dstProjectContext, opts *MigrateOptions) (*gh.ProjectV2Item, error) {
 	if srcItem.Content.Type == gh.ProjectV2ItemTypeRedacted {
 		logger.Info("skipping redacted item", "itemID", srcItem.ID)
 		return nil, nil
@@ -770,59 +863,101 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
 			return prev, nil
 		}
+		// A draft issue is owned by the project, so overwrite deletes and recreates it.
+		// An issue or pull request is external content: keep the link and only re-apply its
+		// field values, matching the content-key reuse path and the documented invariant that
+		// items linked to existing issues or pull requests are never deleted on overwrite.
+		if prev.Content.Type != gh.ProjectV2ItemTypeDraftIssue {
+			applyItemFieldValues(ctx, dst, dstCtx, prev.ID, prev.Content.Type, srcItem.FieldValues)
+			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
+			return prev, nil
+		}
 		if err := gh.DeleteProjectV2Item(ctx, dst, dstCtx.projectID, prev.ID); err != nil {
 			return nil, fmt.Errorf("failed to delete existing item '%s' for overwrite: %w", prev.Content.Title, err)
 		}
 		dstCtx.removeItem(prev.ID)
+	}
+	// An issue or pull request that is already linked to the destination project is reused as is.
+	// The link is never deleted, because the content is owned by the destination repository.
+	if key := expectedDstContentKey(dstOwner, &srcItem.Content); key != "" {
+		if prev := dstCtx.findItemByID(dstCtx.itemByContentKey[key]); prev != nil {
+			if opts != nil && opts.Overwrite {
+				applyItemFieldValues(ctx, dst, dstCtx, prev.ID, prev.Content.Type, srcItem.FieldValues)
+			} else {
+				logger.Info("skipping already-linked item", "title", prev.Content.Title, "itemID", prev.ID)
+			}
+			syncItemArchiveState(ctx, dst, dstCtx.projectID, prev, srcItem.IsArchived)
+			return prev, nil
+		}
 	}
 	title, body := itemDraftContent(srcItem)
 	body = body + "\n\n" + marker
 
 	var itemID string
 	var itemType gh.ProjectV2ItemType
+	linked := false
 
 	if opts != nil && opts.IssueRepo != nil {
 		// Search for an existing issue that carries the migration marker.
 		issues, err := gh.SearchIssues(ctx, dst, *opts.IssueRepo, fmt.Sprintf("%q", marker))
 		if err != nil {
-			logger.Warn("failed to search issues for migration marker; falling back to draft issue", "error", err)
-		} else if len(issues) > 0 {
+			// Fail fast: a search failure means we cannot tell whether a marker issue already
+			// exists, so falling through could link the wrong content or create a duplicate.
+			return nil, fmt.Errorf("failed to search issues for migration marker in repository '%s/%s': %w", opts.IssueRepo.Owner, opts.IssueRepo.Name, err)
+		}
+		if len(issues) > 0 {
 			// Link the first matching issue to the project.
-			issueNodeID := issues[0].GetNodeID()
-			itemID, err = gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, issueNodeID)
+			id, err := gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, issues[0].GetNodeID())
 			if err != nil {
 				return nil, fmt.Errorf("failed to link issue '%s' to destination project: %w", title, err)
 			}
-			itemType = gh.ProjectV2ItemTypeIssue
-		} else if opts.CreateIssue {
-			// No existing issue found and creation is enabled.
-			issue, err := gh.CreateIssue(ctx, dst, *opts.IssueRepo, title, body, nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create issue '%s' in repository '%s/%s': %w", title, opts.IssueRepo.Owner, opts.IssueRepo.Name, err)
-			}
-			itemID, err = gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, issue.GetNodeID())
-			if err != nil {
-				return nil, fmt.Errorf("failed to link issue '%s' to destination project: %w", title, err)
-			}
+			itemID = id
 			itemType = gh.ProjectV2ItemTypeIssue
 		}
 	}
 
 	if itemID == "" {
+		// Link the issue or pull request that has the same repository name and number under dstOwner.
+		nodeID, err := resolveDstContentNodeID(ctx, dst, dstOwner, &srcItem.Content)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve destination content for '%s': %w", title, err)
+		}
+		if nodeID != "" {
+			id, err := gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, nodeID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to link existing content '%s' to destination project: %w", title, err)
+			}
+			itemID = id
+			itemType = srcItem.Content.Type
+			linked = true
+		}
+	}
+
+	if itemID == "" && opts != nil && opts.IssueRepo != nil && opts.CreateIssue {
+		// No existing content found and creation is enabled.
+		issue, err := gh.CreateIssue(ctx, dst, *opts.IssueRepo, title, body, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create issue '%s' in repository '%s/%s': %w", title, opts.IssueRepo.Owner, opts.IssueRepo.Name, err)
+		}
+		id, err := gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, issue.GetNodeID())
+		if err != nil {
+			return nil, fmt.Errorf("failed to link issue '%s' to destination project: %w", title, err)
+		}
+		itemID = id
+		itemType = gh.ProjectV2ItemTypeIssue
+	}
+
+	if itemID == "" {
 		// Fall back to draft issue.
-		var err error
-		itemID, err = gh.AddProjectV2DraftIssue(ctx, dst, dstCtx.projectID, title, body)
+		id, err := gh.AddProjectV2DraftIssue(ctx, dst, dstCtx.projectID, title, body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create draft issue '%s' in destination project: %w", title, err)
 		}
+		itemID = id
 		itemType = gh.ProjectV2ItemTypeDraftIssue
 	}
 
-	for _, fv := range srcItem.FieldValues {
-		if err := setFieldValue(ctx, dst, dstCtx, itemID, itemType, fv); err != nil {
-			logger.Warn("failed to set field value", "field", fv.FieldName, "itemID", itemID, "error", err)
-		}
-	}
+	applyItemFieldValues(ctx, dst, dstCtx, itemID, itemType, srcItem.FieldValues)
 	if srcItem.IsArchived {
 		if err := gh.ArchiveProjectV2Item(ctx, dst, dstCtx.projectID, itemID); err != nil {
 			logger.Warn("failed to archive item", "title", title, "itemID", itemID, "error", err)
@@ -837,8 +972,60 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 		},
 		IsArchived: srcItem.IsArchived,
 	}
-	dstCtx.items = append(dstCtx.items, *result)
+	if linked {
+		// Keep the destination content identity so a re-run finds the link again.
+		result.Content = srcItem.Content
+		result.Content.RepoOwner = dstOwner
+	}
+	dstCtx.addItem(*result)
 	return result, nil
+}
+
+// applyItemFieldValues copies the source field values onto a destination item.
+// Failures are logged because a single unsupported field must not abort the migration.
+func applyItemFieldValues(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProjectContext, itemID string, itemType gh.ProjectV2ItemType, values []gh.ProjectV2FieldValue) {
+	for _, fv := range values {
+		if err := setFieldValue(ctx, dst, dstCtx, itemID, itemType, fv); err != nil {
+			logger.Warn("failed to set field value", "field", fv.FieldName, "itemID", itemID, "error", err)
+		}
+	}
+}
+
+// resolveDstContentNodeID looks up the issue or pull request under dstOwner that has the same
+// repository name and number as the source item. It returns "" (and a nil error) when no content
+// of the same type exists, so the caller can fall back to creating a new issue or a draft issue.
+// A non-nil error means the lookup itself failed; the caller must not fall back in that case,
+// because the content may exist and falling back would create a duplicate.
+func resolveDstContentNodeID(ctx context.Context, dst *gh.GitHubClient, dstOwner string, content *gh.ProjectV2ItemContent) (string, error) {
+	if !isLinkableContent(content) {
+		return "", nil
+	}
+	repo := repository.Repository{Owner: dstOwner, Name: content.RepoName}
+	ref, err := gh.GetIssueOrPullRequestNodeID(ctx, dst, repo, content.Number)
+	if err != nil {
+		return "", fmt.Errorf("failed to look up destination issue or pull request %s/%s#%d: %w", dstOwner, content.RepoName, content.Number, err)
+	}
+	if ref == nil {
+		return "", nil
+	}
+	if !contentTypeMatches(content.Type, ref.Typename) {
+		logger.Warn("destination number exists but has a different type; not linking",
+			"repo", dstOwner+"/"+content.RepoName, "number", content.Number, "typename", ref.Typename)
+		return "", nil
+	}
+	return ref.ID, nil
+}
+
+// contentTypeMatches reports whether the GraphQL type name matches the source item content type.
+func contentTypeMatches(t gh.ProjectV2ItemType, typename string) bool {
+	switch t {
+	case gh.ProjectV2ItemTypeIssue:
+		return typename == "Issue"
+	case gh.ProjectV2ItemTypePullRequest:
+		return typename == "PullRequest"
+	default:
+		return false
+	}
 }
 
 // syncItemArchiveState aligns the archive state of an already-migrated destination item with the source.
@@ -910,16 +1097,39 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 		}
 		return gh.SetProjectV2ItemDateValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, fv.Date)
 	case "SINGLE_SELECT":
-		// If the destination field was converted to TEXT (no options available at source), store the name as text.
-		if dstField.DataType == "TEXT" {
+		switch dstField.DataType {
+		case "TEXT":
+			// The source select field had no options and was created as TEXT; store the name as text.
 			return gh.SetProjectV2ItemTextValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, fv.SelectName)
-		}
-		for _, opt := range dstField.Options {
-			if opt.Name == fv.SelectName {
-				return gh.SetProjectV2ItemSingleSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, opt.ID)
+		case "SINGLE_SELECT":
+			for _, opt := range dstField.Options {
+				if opt.Name == fv.SelectName {
+					return gh.SetProjectV2ItemSingleSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, opt.ID)
+				}
 			}
+			return nil
+		default:
+			// A destination field of the same name has an incompatible type; skip to avoid API errors.
+			return nil
 		}
-		return nil
+	case "MULTI_SELECT":
+		if len(fv.SelectNames) == 0 {
+			return nil
+		}
+		switch dstField.DataType {
+		case "TEXT":
+			// The source select field had no options and was created as TEXT; store the names as text.
+			return gh.SetProjectV2ItemTextValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, strings.Join(fv.SelectNames, ", "))
+		case "MULTI_SELECT":
+			optionIDs := resolveMultiSelectOptionIDs(dstField.Options, fv.SelectNames)
+			if len(optionIDs) == 0 {
+				return nil
+			}
+			return gh.SetProjectV2ItemMultiSelectValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, optionIDs)
+		default:
+			// A destination field of the same name has an incompatible type; skip to avoid API errors.
+			return nil
+		}
 	case "ITERATION":
 		// Match by iteration title to find the corresponding destination iteration ID.
 		// Past sprints live in the completed iterations, so both lists are searched.
@@ -932,4 +1142,20 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 	default:
 		return nil
 	}
+}
+
+// resolveMultiSelectOptionIDs maps selected option names to destination option IDs. The order of
+// the source selection is preserved, and names that have no matching destination option are dropped.
+func resolveMultiSelectOptionIDs(options []gh.ProjectV2SelectOption, names []string) []string {
+	optionIDByName := make(map[string]string, len(options))
+	for _, opt := range options {
+		optionIDByName[opt.Name] = opt.ID
+	}
+	optionIDs := make([]string, 0, len(names))
+	for _, name := range names {
+		if id, ok := optionIDByName[name]; ok {
+			optionIDs = append(optionIDs, id)
+		}
+	}
+	return optionIDs
 }

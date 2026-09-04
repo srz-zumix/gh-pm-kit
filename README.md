@@ -187,15 +187,22 @@ gh pm-kit projects diff <src-number|src-URL> <dst-number|dst-URL> [flags]
 ### projects migrate
 
 Migrate a GitHub Project v2 (New Projects) from one owner to another.
-Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION), views, items, item order, item archive state, and status updates.
-Options of an existing destination SINGLE_SELECT field are aligned with the source: missing options are added, the color/description of matching options are refreshed, and source options are reordered to match the source so board layout columns keep the same order. Destination-only options are appended at the end.
+Copies project metadata, the open/closed state, custom fields (TEXT, NUMBER, DATE, SINGLE_SELECT, MULTI_SELECT, ITERATION), views, items, item order, item archive state, and status updates.
+Options of an existing destination SINGLE_SELECT or MULTI_SELECT field are aligned with the source: missing options are added, the color/description of matching options are refreshed, and source options are reordered to match the source so board layout columns keep the same order. Destination-only options are appended at the end.
+MULTI_SELECT fields are skipped with a warning if their creation fails (for example, when the destination GitHub version does not support them), so the rest of the migration still completes.
 ITERATION fields are recreated with both their past and current iterations, so sprints already completed in the source project are reproduced.
 Views are recreated with their layout, filter, visible fields, sorting, and grouping; destination views with the same name are left untouched because the API has no view update endpoint, and destination views that do not exist in the source (such as the default view of a newly created project) are deleted.
 Built-in workflows (automations) are not migrated: the API exposes only their name and enabled flag and offers no way to create or enable one. Enabled source workflows that are disabled in the destination are reported as a warning so they can be enabled manually.
 
-Items are migrated as draft issues by default.
-If `--repo` is specified, the migration first searches for an existing issue carrying the migration marker in that repository and links it to the project.
-If no matching issue is found and `--create-issue` is set, a new issue is created; otherwise a draft issue is used as a fallback.
+The destination content of each item is resolved in the following order:
+
+1. A destination item that already carries the migration marker.
+2. An issue carrying the migration marker in the `--repo` repository.
+3. The issue or pull request with the same repository name and number under the destination owner. Only the owner may differ between hosts, so the repository name and number must match, and the content type (issue or pull request) is verified before linking.
+4. A new issue created in the `--repo` repository when `--create-issue` is set.
+5. A draft issue.
+
+Items linked to existing issues or pull requests are never deleted, even with `--overwrite`; only their field values are re-applied.
 Archived items are migrated and archived again in the destination. Older GitHub Enterprise Server versions do not expose archived items through the API, so archived items of such a source project cannot be migrated.
 
 If a destination project number or URL is given as the second argument, that project is used as the migration target.
@@ -212,8 +219,8 @@ gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
 | `-s, --src string` | current owner | Source owner in the format `[HOST/]OWNER` |
 | `-d, --dst string` | **(required)** | Destination owner in the format `[HOST/]OWNER` (required unless a destination URL is given as the second argument) |
 | `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; items are linked to matching issues (by migration marker) in this repository |
-| `--create-issue` | `false` | When `--repo` is set and no matching issue is found, create a new issue instead of a draft issue |
-| `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped |
+| `--create-issue` | `false` | When `--repo` is set and no existing issue or pull request matches, create a new issue instead of a draft issue |
+| `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped. Items linked to existing issues or pull requests are kept and only their field values are re-applied |
 
 ---
 

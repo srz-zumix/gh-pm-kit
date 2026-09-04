@@ -24,22 +24,28 @@ func NewMigrateCmd() *cobra.Command {
 		Short: "Migrate a GitHub Project v2 to another owner",
 		Long: "Migrate a GitHub Project v2 (New Projects) from one owner to another.\n" +
 			"The source project metadata, open/closed state, custom fields (TEXT, NUMBER,\n" +
-			"DATE, SINGLE_SELECT, ITERATION), views, items, item order, item archive state,\n" +
-			"and status updates are copied to the destination owner. SINGLE_SELECT options are\n" +
-			"aligned with the source, including their order, so board layout columns match.\n" +
+			"DATE, SINGLE_SELECT, MULTI_SELECT, ITERATION), views, items, item order, item\n" +
+			"archive state, and status updates are copied to the destination owner.\n" +
+			"SINGLE_SELECT and MULTI_SELECT options are aligned with the source, including\n" +
+			"their order, so board layout columns match. MULTI_SELECT is skipped with a\n" +
+			"warning if its creation fails (e.g. the destination GitHub version does not\n" +
+			"support it).\n" +
 			"ITERATION fields keep their past and current iterations.\n" +
 			"Views are recreated with their layout, filter, visible fields, sorting, and\n" +
 			"grouping; destination views with the same name are left untouched, and\n" +
 			"destination views that do not exist in the source are deleted.\n" +
 			"Built-in workflows (automations) cannot be migrated because the API offers no\n" +
 			"way to create or enable one; they are reported as a warning instead.\n\n" +
-			"Items are migrated as draft issues by default. If --repo is specified, the\n" +
-			"migration first searches for an existing issue in that repository that carries\n" +
-			"the migration marker and links it to the project. If no matching issue is found\n" +
-			"and --create-issue is set, a new issue is created; otherwise a draft issue is\n" +
-			"used as a fallback. Archived items are archived again in the destination, but\n" +
-			"older GitHub Enterprise Server versions do not expose archived items through\n" +
-			"the API and therefore cannot migrate them.\n\n" +
+			"Destination content for each item is resolved in this order: an item that\n" +
+			"already carries the migration marker; an issue carrying the marker in the\n" +
+			"--repo repository; the issue or pull request with the same repository name and\n" +
+			"number under the destination owner; a new issue created in the --repo\n" +
+			"repository when --create-issue is set; and finally a draft issue. Only the\n" +
+			"owner may differ between hosts, so the repository name and number must match.\n" +
+			"Items linked to existing content are never deleted, even with --overwrite.\n" +
+			"Archived items are archived again in the destination, but older GitHub\n" +
+			"Enterprise Server versions do not expose archived items through the API and\n" +
+			"therefore cannot migrate them.\n\n" +
 			"The source project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"If a destination project number or URL is given as the second argument,\n" +
@@ -134,7 +140,7 @@ func NewMigrateCmd() *cobra.Command {
 	f.StringVarP(&srcOwnerFlag, "src", "s", "", "Source owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
 	f.StringVarP(&dstOwnerFlag, "dst", "d", "", "Destination owner in the format '[HOST/]OWNER' (required unless a destination URL is given as the second argument)")
 	f.StringVarP(&issueRepoFlag, "repo", "r", "", "Repository in '[HOST/]OWNER/REPO' format; items are linked to matching issues (by migration marker) in this repository")
-	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no matching issue is found, create a new issue instead of a draft issue")
-	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped")
+	f.BoolVar(&createIssue, "create-issue", false, "When --repo is set and no existing issue or pull request matches, create a new issue instead of a draft issue")
+	f.BoolVar(&overwrite, "overwrite", false, "Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped. Items linked to existing issues or pull requests are kept and only their field values are re-applied")
 	return cmd
 }
