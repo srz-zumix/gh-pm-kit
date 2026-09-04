@@ -65,3 +65,94 @@ func TestExpectedDstContentKeyEmptyForDraft(t *testing.T) {
 		t.Fatalf("draft issue must not produce an expected destination key")
 	}
 }
+
+func draftItem(id string) gh.ProjectV2Item {
+	return gh.ProjectV2Item{ID: id, Content: gh.ProjectV2ItemContent{Type: gh.ProjectV2ItemTypeDraftIssue}}
+}
+
+func assertIndexConsistent(t *testing.T, c *dstProjectContext) {
+	t.Helper()
+	if len(c.itemByID) != len(c.items) {
+		t.Fatalf("itemByID size %d != items size %d", len(c.itemByID), len(c.items))
+	}
+	for id, idx := range c.itemByID {
+		if idx < 0 || idx >= len(c.items) {
+			t.Fatalf("index %d for %q out of range", idx, id)
+		}
+		if c.items[idx].ID != id {
+			t.Fatalf("itemByID[%q]=%d points at %q", id, idx, c.items[idx].ID)
+		}
+	}
+}
+
+func TestRemoveItemMaintainsIndex(t *testing.T) {
+	for _, target := range []string{"a", "b", "c", "missing"} {
+		c := newDstProjectContext("proj", nil)
+		c.addItem(draftItem("a"))
+		c.addItem(draftItem("b"))
+		c.addItem(draftItem("c"))
+		c.removeItem(target)
+		assertIndexConsistent(t, c)
+		if target != "missing" {
+			if c.findItemByID(target) != nil {
+				t.Fatalf("item %q should be gone after removal", target)
+			}
+			if len(c.items) != 2 {
+				t.Fatalf("expected 2 items after removing %q, got %d", target, len(c.items))
+			}
+		} else if len(c.items) != 3 {
+			t.Fatalf("removing a missing item must not change items, got %d", len(c.items))
+		}
+	}
+}
+
+func TestRemoveLastItemDoesNotResurrect(t *testing.T) {
+	c := newDstProjectContext("proj", nil)
+	c.addItem(draftItem("a"))
+	c.addItem(draftItem("b"))
+	c.removeItem("b") // b is the last element: must not be re-added to itemByID
+	if c.findItemByID("b") != nil {
+		t.Fatalf("last item b must be removed, not resurrected")
+	}
+	assertIndexConsistent(t, c)
+}
+
+func TestFindItemByIDEmpty(t *testing.T) {
+	c := newDstProjectContext("proj", nil)
+	c.addItem(draftItem("a"))
+	if c.findItemByID("") != nil {
+		t.Fatalf("empty ID must not match any item")
+	}
+}
+
+func selectOption(name, id string) gh.ProjectV2SelectOption {
+	return gh.ProjectV2SelectOption{Name: name, ID: id}
+}
+
+func TestResolveMultiSelectOptionIDs(t *testing.T) {
+	options := []gh.ProjectV2SelectOption{
+		selectOption("Bug", "id-bug"),
+		selectOption("Feature", "id-feat"),
+		selectOption("Chore", "id-chore"),
+	}
+	// Multiple known names map to IDs in source-selection order.
+	got := resolveMultiSelectOptionIDs(options, []string{"Feature", "Bug"})
+	want := []string{"id-feat", "id-bug"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order mismatch: got %v, want %v", got, want)
+		}
+	}
+	// Unknown names are dropped, known ones kept.
+	got = resolveMultiSelectOptionIDs(options, []string{"Unknown", "Chore"})
+	if len(got) != 1 || got[0] != "id-chore" {
+		t.Fatalf("unknown names must be dropped: got %v", got)
+	}
+	// No matches yields an empty slice.
+	if got = resolveMultiSelectOptionIDs(options, []string{"Nope"}); len(got) != 0 {
+		t.Fatalf("expected empty result, got %v", got)
+	}
+}

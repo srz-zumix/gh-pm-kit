@@ -134,6 +134,8 @@ type dstProjectContext struct {
 	// itemByContentKey maps an issue/pull-request content key ("owner/repo#number") to the ID of
 	// the project item that already links it, so re-runs reuse the link instead of creating a duplicate.
 	itemByContentKey map[string]string
+	// itemByID maps a project item ID to its index in items for O(1) lookup and removal.
+	itemByID map[string]int
 }
 
 // newDstProjectContext creates an empty context for the given destination project.
@@ -142,6 +144,7 @@ func newDstProjectContext(projectID string, fieldByName map[string]*gh.ProjectV2
 		projectID:        projectID,
 		fieldByName:      fieldByName,
 		itemByContentKey: make(map[string]string),
+		itemByID:         make(map[string]int),
 	}
 }
 
@@ -175,9 +178,12 @@ func expectedDstContentKey(dstOwner string, c *gh.ProjectV2ItemContent) string {
 	return strings.ToLower(dstOwner+"/"+c.RepoName) + "#" + strconv.Itoa(c.Number)
 }
 
-// addItem caches a destination item and indexes it by content key when it links an issue or PR.
+// addItem caches a destination item and indexes it by ID and, when it links an issue or PR, by content key.
 func (c *dstProjectContext) addItem(item gh.ProjectV2Item) {
 	c.items = append(c.items, item)
+	if item.ID != "" {
+		c.itemByID[item.ID] = len(c.items) - 1
+	}
 	if key := itemContentKey(&item.Content); key != "" {
 		c.itemByContentKey[key] = item.ID
 	}
@@ -185,26 +191,33 @@ func (c *dstProjectContext) addItem(item gh.ProjectV2Item) {
 
 // findItemByID returns a pointer to the cached item with the given ID, or nil.
 func (c *dstProjectContext) findItemByID(itemID string) *gh.ProjectV2Item {
-	for i := range c.items {
-		if c.items[i].ID == itemID {
-			return &c.items[i]
-		}
+	if idx, ok := c.itemByID[itemID]; ok {
+		return &c.items[idx]
 	}
 	return nil
 }
 
-// removeItem removes an item by ID from the cached items slice.
+// removeItem removes an item by ID from the cached items slice and both indexes.
 func (c *dstProjectContext) removeItem(itemID string) {
-	for i := range c.items {
-		if c.items[i].ID == itemID {
-			if key := itemContentKey(&c.items[i].Content); key != "" {
-				delete(c.itemByContentKey, key)
-			}
-			c.items[i] = c.items[len(c.items)-1]
-			c.items = c.items[:len(c.items)-1]
-			return
+	idx, ok := c.itemByID[itemID]
+	if !ok {
+		return
+	}
+	last := len(c.items) - 1
+	removed := c.items[idx]
+	delete(c.itemByID, itemID)
+	if key := itemContentKey(&removed.Content); key != "" {
+		delete(c.itemByContentKey, key)
+	}
+	// Move the last item into the freed slot and reindex it, unless the removed item was last.
+	if idx != last {
+		moved := c.items[last]
+		c.items[idx] = moved
+		if moved.ID != "" {
+			c.itemByID[moved.ID] = idx
 		}
 	}
+	c.items = c.items[:last]
 }
 
 // findItemByMarker returns a pointer to the first draft-issue or issue item whose body
@@ -901,15 +914,18 @@ func migrateItem(ctx context.Context, dst *gh.GitHubClient, srcHost, srcOwner st
 
 	if itemID == "" {
 		// Link the issue or pull request that has the same repository name and number under dstOwner.
-		if nodeID := resolveDstContentNodeID(ctx, dst, dstOwner, &srcItem.Content); nodeID != "" {
+		nodeID, err := resolveDstContentNodeID(ctx, dst, dstOwner, &srcItem.Content)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve destination content for '%s': %w", title, err)
+		}
+		if nodeID != "" {
 			id, err := gh.AddProjectV2ItemByID(ctx, dst, dstCtx.projectID, nodeID)
 			if err != nil {
-				logger.Warn("failed to link existing content to destination project", "title", title, "error", err)
-			} else {
-				itemID = id
-				itemType = srcItem.Content.Type
-				linked = true
+				return nil, fmt.Errorf("failed to link existing content '%s' to destination project: %w", title, err)
 			}
+			itemID = id
+			itemType = srcItem.Content.Type
+			linked = true
 		}
 	}
 
@@ -972,27 +988,28 @@ func applyItemFieldValues(ctx context.Context, dst *gh.GitHubClient, dstCtx *dst
 }
 
 // resolveDstContentNodeID looks up the issue or pull request under dstOwner that has the same
-// repository name and number as the source item. It returns "" when no content of the same type
-// exists, so the caller can fall back to creating a new issue or a draft issue.
-func resolveDstContentNodeID(ctx context.Context, dst *gh.GitHubClient, dstOwner string, content *gh.ProjectV2ItemContent) string {
+// repository name and number as the source item. It returns "" (and a nil error) when no content
+// of the same type exists, so the caller can fall back to creating a new issue or a draft issue.
+// A non-nil error means the lookup itself failed; the caller must not fall back in that case,
+// because the content may exist and falling back would create a duplicate.
+func resolveDstContentNodeID(ctx context.Context, dst *gh.GitHubClient, dstOwner string, content *gh.ProjectV2ItemContent) (string, error) {
 	if !isLinkableContent(content) {
-		return ""
+		return "", nil
 	}
 	repo := repository.Repository{Owner: dstOwner, Name: content.RepoName}
 	ref, err := gh.GetIssueOrPullRequestNodeID(ctx, dst, repo, content.Number)
 	if err != nil {
-		logger.Warn("failed to look up destination issue or pull request", "repo", dstOwner+"/"+content.RepoName, "number", content.Number, "error", err)
-		return ""
+		return "", fmt.Errorf("failed to look up destination issue or pull request %s/%s#%d: %w", dstOwner, content.RepoName, content.Number, err)
 	}
 	if ref == nil {
-		return ""
+		return "", nil
 	}
 	if !contentTypeMatches(content.Type, ref.Typename) {
 		logger.Warn("destination number exists but has a different type; not linking",
 			"repo", dstOwner+"/"+content.RepoName, "number", content.Number, "typename", ref.Typename)
-		return ""
+		return "", nil
 	}
-	return ref.ID
+	return ref.ID, nil
 }
 
 // contentTypeMatches reports whether the GraphQL type name matches the source item content type.
@@ -1094,16 +1111,7 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 		if dstField.DataType == "TEXT" {
 			return gh.SetProjectV2ItemTextValue(ctx, dst, dstCtx.projectID, itemID, dstField.ID, strings.Join(fv.SelectNames, ", "))
 		}
-		optionIDByName := make(map[string]string, len(dstField.Options))
-		for _, opt := range dstField.Options {
-			optionIDByName[opt.Name] = opt.ID
-		}
-		optionIDs := make([]string, 0, len(fv.SelectNames))
-		for _, name := range fv.SelectNames {
-			if id, ok := optionIDByName[name]; ok {
-				optionIDs = append(optionIDs, id)
-			}
-		}
+		optionIDs := resolveMultiSelectOptionIDs(dstField.Options, fv.SelectNames)
 		if len(optionIDs) == 0 {
 			return nil
 		}
@@ -1120,4 +1128,20 @@ func setFieldValue(ctx context.Context, dst *gh.GitHubClient, dstCtx *dstProject
 	default:
 		return nil
 	}
+}
+
+// resolveMultiSelectOptionIDs maps selected option names to destination option IDs. The order of
+// the source selection is preserved, and names that have no matching destination option are dropped.
+func resolveMultiSelectOptionIDs(options []gh.ProjectV2SelectOption, names []string) []string {
+	optionIDByName := make(map[string]string, len(options))
+	for _, opt := range options {
+		optionIDByName[opt.Name] = opt.ID
+	}
+	optionIDs := make([]string, 0, len(names))
+	for _, name := range names {
+		if id, ok := optionIDByName[name]; ok {
+			optionIDs = append(optionIDs, id)
+		}
+	}
+	return optionIDs
 }
