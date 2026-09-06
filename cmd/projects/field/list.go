@@ -33,7 +33,7 @@ func NewListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo, number, err := projects.ResolveProject(args[0], ownerFlag)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to resolve project %q: %w", args[0], err)
 			}
 
 			client, err := gh.NewGitHubClientWithRepo(repo)
