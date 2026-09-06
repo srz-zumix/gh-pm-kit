@@ -172,7 +172,7 @@ gh pm-kit projects item list <number|URL> [flags]
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
-| `--field strings` | `TYPE,NUMBER,TITLE,URL` | Built-in fields to display: `ID\|TYPE\|NUMBER\|TITLE\|AUTHOR\|URL\|ARCHIVED` |
+| `--field strings` | `TYPE,NUMBER,TITLE,URL` | Built-in fields to display: `ID\|TYPE\|NUMBER\|TITLE\|AUTHOR\|URL\|ARCHIVED\|STATE\|REPOSITORY\|ASSIGNEES\|LABELS\|MILESTONE\|CREATED_AT\|UPDATED_AT\|CLOSED_AT` |
 | `--custom-field strings` | | Custom field names to display (any ProjectV2 custom field name) |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
@@ -276,6 +276,26 @@ gh pm-kit projects migrate <number|URL> [dst-number|dst-URL] --dst OWNER [flags]
 | `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; items are linked to matching issues (by migration marker) in this repository |
 | `--create-issue` | `false` | When `--repo` is set and no existing issue or pull request matches, create a new issue instead of a draft issue |
 | `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker: when no destination project is given, overwrite the existing migrated project instead of skipping it; migrated items are deleted and re-created, and migrated status updates are refreshed in place, instead of being skipped. Items linked to existing issues or pull requests are kept and only their field values are re-applied |
+
+### projects stats
+
+Show aggregated statistics for a GitHub Project v2.
+The report covers item totals by type and state, custom field completeness, select/iteration value distribution (including options no item uses), repository, assignee and label distribution, view layouts, and an approximated lead time based on the issue `createdAt`/`closedAt` timestamps.
+Archived items are excluded unless `--include-archived` is given; the archived count itself is always reported.
+The project can be specified by its number or by its URL (e.g. `https://github.com/orgs/my-org/projects/1`).
+
+```sh
+gh pm-kit projects stats <number|URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--include-archived` | `false` | Include archived items in the statistics |
+| `--group-by string` | | Custom field name to break items down by |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
 
 ---
 
