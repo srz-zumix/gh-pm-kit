@@ -17,10 +17,13 @@ func NewProjectsCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(projects.NewDiffCmd())
+	cmd.AddCommand(projects.NewFieldCmd())
 	cmd.AddCommand(projects.NewItemCmd())
 	cmd.AddCommand(projects.NewListCmd())
 	cmd.AddCommand(projects.NewMigrateCmd())
+	cmd.AddCommand(projects.NewStatusCmd())
 	cmd.AddCommand(projects.NewV1Cmd())
+	cmd.AddCommand(projects.NewViewCmd())
 	return cmd
 }
 
