@@ -140,6 +140,25 @@ gh pm-kit projects list [flags]
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
 | `-t, --template string` | | Format JSON output using a Go template |
 
+### projects field list
+
+List the field definitions of a GitHub Project v2, including built-in fields.
+By default each field is shown on a single row with its select options or iteration count summarized.
+Use `--show-options` to expand every select option and iteration (including completed ones) onto its own row.
+The project can be specified by its number or by its URL (e.g. `https://github.com/orgs/my-org/projects/1`).
+
+```sh
+gh pm-kit projects field list <number|URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--show-options` | `false` | Expand select options and iterations onto individual rows |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
 ### projects item list
 
 List items in a GitHub Project v2.
@@ -155,6 +174,42 @@ gh pm-kit projects item list <number|URL> [flags]
 | `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
 | `--field strings` | `TYPE,NUMBER,TITLE,URL` | Built-in fields to display: `ID\|TYPE\|NUMBER\|TITLE\|AUTHOR\|URL\|ARCHIVED` |
 | `--custom-field strings` | | Custom field names to display (any ProjectV2 custom field name) |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+### projects status list
+
+List the status updates posted on a GitHub Project v2, newest first.
+Each update shows its posted date, status (`INACTIVE`, `ON_TRACK`, `AT_RISK`, `OFF_TRACK`, `COMPLETE`), start and target dates, creator, and the first line of its body.
+Use `--format json` to retrieve full bodies.
+The project can be specified by its number or by its URL (e.g. `https://github.com/orgs/my-org/projects/1`).
+
+```sh
+gh pm-kit projects status list <number|URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+### projects view list
+
+List the views configured in a GitHub Project v2, including their layout, filter, grouping and sort criteria.
+Useful for auditing how a project is presented to its users.
+The project can be specified by its number or by its URL (e.g. `https://github.com/orgs/my-org/projects/1`).
+
+```sh
+gh pm-kit projects view list <number|URL> [flags]
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--field strings` | `NUMBER,NAME,LAYOUT,FILTER,GROUPBY,SORTBY` | Fields to display: `ID\|NUMBER\|NAME\|LAYOUT\|FILTER\|GROUPBY\|VERTICALGROUPBY\|SORTBY\|VISIBLEFIELDS` |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
 | `-t, --template string` | | Format JSON output using a Go template |

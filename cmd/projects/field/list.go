@@ -1,5 +1,5 @@
-// Package item provides the CLI command for listing GitHub Project v2 items.
-package item
+// Package field provides CLI commands for GitHub Project v2 fields.
+package field
 
 import (
 	"fmt"
@@ -11,23 +11,23 @@ import (
 	"github.com/srz-zumix/go-gh-extension/pkg/render"
 )
 
-// NewListCmd creates the projects item list command.
+// NewListCmd creates the projects field list command.
 func NewListCmd() *cobra.Command {
 	var ownerFlag string
-	var fields []string
-	var customFields []string
+	var showOptions bool
 	opts := struct {
 		Exporter cmdutil.Exporter
 	}{}
 
 	cmd := &cobra.Command{
 		Use:   "list <number|URL>",
-		Short: "List items in a GitHub Project v2",
-		Long: "List items in a GitHub Project v2.\n\n" +
+		Short: "List field definitions in a GitHub Project v2",
+		Long: "List the field definitions of a GitHub Project v2, including built-in fields.\n\n" +
+			"By default each field is shown on a single row with its select options or\n" +
+			"iteration count summarized. Use --show-options to expand every select option\n" +
+			"and iteration (including completed ones) onto its own row.\n\n" +
 			"The project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
-			"Archived items are included when the host supports them (GitHub.com and recent\n" +
-			"GitHub Enterprise Server); older hosts return only non-archived items.\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -42,21 +42,22 @@ func NewListCmd() *cobra.Command {
 			}
 
 			ctx := cmd.Context()
-			items, err := gh.ListProjectV2Items(ctx, client, repo.Owner, number)
+			fields, err := gh.ListProjectV2Fields(ctx, client, repo.Owner, number)
 			if err != nil {
-				return fmt.Errorf("failed to list items for project #%d of '%s': %w", number, repo.Owner, err)
+				return fmt.Errorf("failed to list fields for project #%d of '%s': %w", number, repo.Owner, err)
 			}
 
-			allFields := append(fields, customFields...)
 			renderer := render.NewRenderer(opts.Exporter)
-			return renderer.RenderProjectV2Items(items, allFields)
+			if showOptions {
+				return renderer.RenderProjectV2FieldOptions(fields)
+			}
+			return renderer.RenderProjectV2Fields(fields)
 		},
 	}
 
 	f := cmd.Flags()
 	f.StringVarP(&ownerFlag, "owner", "o", "", "Owner in the format '[HOST/]OWNER' (defaults to current repository owner)")
-	cmdutil.StringSliceEnumFlag(cmd, &fields, "field", "", nil, render.ProjectV2ItemFields, "Fields to display (default: TYPE,NUMBER,TITLE,URL)")
-	f.StringSliceVar(&customFields, "custom-field", nil, "Custom field names to display (any ProjectV2 custom field name)")
+	f.BoolVar(&showOptions, "show-options", false, "Expand select options and iterations onto individual rows")
 	cmdutil.AddFormatFlags(cmd, &opts.Exporter)
 	return cmd
 }
