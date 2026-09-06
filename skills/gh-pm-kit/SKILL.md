@@ -48,6 +48,7 @@ gh pm-kit
     │   └── list <number|URL>
     ├── diff <src> <dst>    # Show diff between two projects
     ├── migrate <number|URL> [dst-number|dst-URL]
+    ├── stats <number|URL>   # Show aggregated project statistics
     └── v1                  # GitHub Projects classic management
         ├── list            # List classic projects
         ├── columns         # Column management
@@ -343,6 +344,9 @@ gh pm-kit projects item list https://github.com/orgs/my-org/projects/1
 # Show additional built-in fields
 gh pm-kit projects item list 1 --field ID,TYPE,NUMBER,TITLE,AUTHOR,URL,ARCHIVED
 
+# Show issue/pull request metadata
+gh pm-kit projects item list 1 --field NUMBER,TITLE,STATE,ASSIGNEES,LABELS,MILESTONE,CLOSED_AT
+
 # Show custom fields
 gh pm-kit projects item list 1 --custom-field "Status" --custom-field "Priority"
 
@@ -356,7 +360,7 @@ gh pm-kit projects item list 1 --format json --jq '.[].title'
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
-| `--field strings` | `TYPE,NUMBER,TITLE,URL` | Built-in fields to display: `ID\|TYPE\|NUMBER\|TITLE\|AUTHOR\|URL\|ARCHIVED` |
+| `--field strings` | `TYPE,NUMBER,TITLE,URL` | Built-in fields to display: `ID\|TYPE\|NUMBER\|TITLE\|AUTHOR\|URL\|ARCHIVED\|STATE\|REPOSITORY\|ASSIGNEES\|LABELS\|MILESTONE\|CREATED_AT\|UPDATED_AT\|CLOSED_AT` |
 | `--custom-field strings` | | Custom field names to display (any ProjectV2 custom field name) |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
@@ -564,6 +568,53 @@ gh pm-kit projects migrate 1 --dst dst-owner --read-only
 | `-r, --repo string` | | Repository in `[HOST/]OWNER/REPO` format; items are linked to matching issues (by migration marker) in this repository |
 | `--create-issue` | `false` | When `--repo` is set and no existing issue or pull request matches, create a new issue instead of a draft issue |
 | `--overwrite` | `false` | Overwrite previously migrated content identified by the migration marker. Items linked to existing issues or pull requests are kept and only their field values are re-applied |
+
+---
+
+### projects stats
+
+Show aggregated statistics for a GitHub Project v2.
+
+The report covers item totals by type and state, custom field completeness,
+select/iteration value distribution (including options no item uses),
+repository, assignee and label distribution, view layouts, and an approximated
+lead time based on the issue `createdAt`/`closedAt` timestamps.
+
+Archived items are excluded unless `--include-archived` is given; the archived
+count itself is always reported.
+
+```sh
+gh pm-kit projects stats <number|URL> [flags]
+```
+
+```sh
+# Statistics for project #1 of the current owner
+gh pm-kit projects stats 1
+
+# Statistics for a specific owner's project
+gh pm-kit projects stats 1 --owner my-org
+
+# Include archived items in every section
+gh pm-kit projects stats 1 --include-archived
+
+# Break items down by a custom field
+gh pm-kit projects stats 1 --group-by Status
+
+# Output as JSON
+gh pm-kit projects stats 1 --format json
+
+# Get the completeness of every custom field with jq
+gh pm-kit projects stats 1 --format json --jq '.fields[] | "\(.name): \(.completeness)%"'
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--include-archived` | `false` | Include archived items in the statistics |
+| `--group-by string` | | Custom field name to break items down by |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
 
 ---
 
