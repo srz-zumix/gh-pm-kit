@@ -19,6 +19,7 @@ func NewProjectsCmd() *cobra.Command {
 	cmd.AddCommand(projects.NewDiffCmd())
 	cmd.AddCommand(projects.NewFieldCmd())
 	cmd.AddCommand(projects.NewItemCmd())
+	cmd.AddCommand(projects.NewLintCmd())
 	cmd.AddCommand(projects.NewListCmd())
 	cmd.AddCommand(projects.NewMigrateCmd())
 	cmd.AddCommand(projects.NewStatsCmd())

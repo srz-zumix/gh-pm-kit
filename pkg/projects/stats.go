@@ -84,15 +84,15 @@ func calcProjectStatsSummary(collected *CollectedProject, items []gh.ProjectV2It
 			summary.ClosedItems++
 		}
 	}
-	if latest := latestStatusUpdate(collected.StatusUpdates); latest != nil {
+	if latest := LatestStatusUpdate(collected.StatusUpdates); latest != nil {
 		summary.LatestStatus = string(latest.Status)
 		summary.LatestStatusAt = latest.CreatedAt
 	}
 	return summary
 }
 
-// latestStatusUpdate returns the most recently created status update.
-func latestStatusUpdate(updates []gh.ProjectV2StatusUpdate) *gh.ProjectV2StatusUpdate {
+// LatestStatusUpdate returns the most recently created status update.
+func LatestStatusUpdate(updates []gh.ProjectV2StatusUpdate) *gh.ProjectV2StatusUpdate {
 	var latest *gh.ProjectV2StatusUpdate
 	var latestAt time.Time
 	for i := range updates {
@@ -119,7 +119,7 @@ func calcProjectFieldStats(fields []gh.ProjectV2Field, items []gh.ProjectV2Item)
 		counts := map[string]int{}
 		set := 0
 		for _, item := range items {
-			values := projectItemFieldValues(item, field.Name)
+			values := ItemFieldValues(item, field.Name)
 			if len(values) == 0 {
 				continue
 			}
@@ -209,7 +209,7 @@ func calcProjectGroupStats(items []gh.ProjectV2Item, fieldName string) []render.
 	}
 
 	for _, item := range items {
-		values := projectItemFieldValues(item, fieldName)
+		values := ItemFieldValues(item, fieldName)
 		if len(values) == 0 {
 			add(noValue, item)
 			continue
@@ -301,9 +301,9 @@ func projectItemLabels(item gh.ProjectV2Item) []string {
 	return item.Content.Labels
 }
 
-// projectItemFieldValues returns the display values an item holds for the named
+// ItemFieldValues returns the display values an item holds for the named
 // field. Multi-select fields yield one entry per selected option.
-func projectItemFieldValues(item gh.ProjectV2Item, fieldName string) []string {
+func ItemFieldValues(item gh.ProjectV2Item, fieldName string) []string {
 	for _, fv := range item.FieldValues {
 		if !strings.EqualFold(fv.FieldName, fieldName) {
 			continue
