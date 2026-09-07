@@ -242,7 +242,8 @@ gh pm-kit projects diff <src-number|src-URL> <dst-number|dst-URL> [flags]
 ### projects lint
 
 Check a GitHub Project v2 against operational rules and report every violation.
-Findings whose severity is at or above `--fail-on` make the command exit non-zero, which makes the command suitable for scheduled CI runs.
+Findings whose severity is at or above `--fail-on` make the command exit
+non-zero, which makes the command suitable for scheduled CI runs.
 
 ```sh
 gh pm-kit projects lint <number|URL> [flags]
@@ -265,8 +266,10 @@ gh pm-kit projects lint <number|URL> [flags]
 | `PM015` | `past-iteration-incomplete` | warning | Item is still assigned to a completed iteration but is not finished |
 | `PM016` | `orphaned-item` | error | Linked issue or pull request is no longer accessible |
 
-`PM006` compares filter qualifiers with the project field names, so views that use qualifiers this version does not know about are reported as findings.
-Archived items are only checked when `--include-archived` is given, except for `PM014` which always inspects archived items.
+`PM006` compares filter qualifiers with the project field names, so views that
+use qualifiers this version does not know about are reported as findings.
+Archived items are only checked when `--include-archived` is given, except for
+`PM014` which always inspects archived items.
 
 | Flag | Default | Description |
 | --- | --- | --- |

@@ -71,7 +71,9 @@ func projectLintSeverityLabel(severity string, colorize bool) string {
 	if !colorize {
 		return upper
 	}
-	switch severity {
+	// Match on the normalized severity so decoded reports using mixed case (e.g. "ERROR")
+	// still map to the correct color instead of falling through to the default.
+	switch strings.ToLower(severity) {
 	case "error":
 		return color.RedString(upper)
 	case "warning":

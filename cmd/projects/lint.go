@@ -78,8 +78,8 @@ func NewLintCmd() *cobra.Command {
 
 			if !exitZero && lint.ShouldFail(report, resolved.FailOn) {
 				cmd.SilenceUsage = true
-				return fmt.Errorf("lint found %d error(s) and %d warning(s) in project #%d of '%s'",
-					report.Summary.Errors, report.Summary.Warnings, number, repo.Owner)
+				return fmt.Errorf("lint found %d error(s), %d warning(s), and %d info(s) in project #%d of '%s'; failure threshold is %q",
+					report.Summary.Errors, report.Summary.Warnings, report.Summary.Infos, number, repo.Owner, resolved.FailOn)
 			}
 			return nil
 		},
@@ -158,6 +158,19 @@ func resolveLintOptions(cmd *cobra.Command, configPath, failOn string, flagOpts 
 		}
 		resolved.FailOn = severity
 	}
+	// Default and canonicalize the merged fail-on threshold so the command uses the same
+	// effective value that lint.Run applies internally. lint.Run only defaults its own copy,
+	// so without this the caller-side FailOn (used by ShouldFail and the failure message)
+	// could stay empty or keep a config-provided mixed-case value, both of which rank as 0
+	// and would make any finding trigger a non-zero exit.
+	if resolved.FailOn == "" {
+		resolved.FailOn = lint.DefaultFailOn
+	}
+	failOnSeverity, err := lint.ParseSeverity(string(resolved.FailOn))
+	if err != nil {
+		return nil, err
+	}
+	resolved.FailOn = failOnSeverity
 	return resolved, nil
 }
 
