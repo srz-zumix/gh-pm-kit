@@ -47,6 +47,7 @@ gh pm-kit
     ├── view                # Project view management
     │   └── list <number|URL>
     ├── diff <src> <dst>    # Show diff between two projects
+    ├── lint <number|URL>    # Check a project against operational rules
     ├── migrate <number|URL> [dst-number|dst-URL]
     ├── stats <number|URL>   # Show aggregated project statistics
     └── v1                  # GitHub Projects classic management
@@ -484,6 +485,117 @@ gh pm-kit projects diff 1 2 --src src-owner --dst dst-owner --format json
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
 | `-t, --template string` | | Format JSON output using a Go template |
+
+---
+
+### projects lint
+
+Check a GitHub Project v2 against operational rules and report every violation.
+
+Findings whose severity is at or above `--fail-on` make the command exit non-zero,
+which makes the command suitable for scheduled CI runs.
+
+```sh
+gh pm-kit projects lint <number|URL> [flags]
+```
+
+| Rule | Name | Default severity | Description |
+| --- | --- | --- | --- |
+| `PM001` | `no-status` | warning | Item has no value in the status field |
+| `PM002` | `missing-required-field` | warning | Item has no value in a field listed in `--require` |
+| `PM003` | `draft-issue-remaining` | info | Item is still a draft issue and is not tracked in a repository |
+| `PM004` | `stale-status-update` | warning | No status update has been posted within `--status-update-days` |
+| `PM005` | `unused-select-option` | info | A select option is not used by any item |
+| `PM006` | `broken-view-filter` | info | A view filter references an unknown qualifier or field |
+| `PM007` | `duplicate-draft` | warning | Multiple draft issues share the same title |
+| `PM010` | `closed-issue-not-done` | error | Linked issue or pull request is closed but the status is not a done status |
+| `PM011` | `done-but-open` | error | Status is a done status but the linked issue or pull request is still open |
+| `PM012` | `stale-item` | warning | Unfinished item has not been updated within `--stale-days` |
+| `PM013` | `unassigned-in-progress` | warning | Item is in an in-progress status but has no assignee |
+| `PM014` | `archived-but-open` | warning | Item is archived but the linked issue or pull request is still open |
+| `PM015` | `past-iteration-incomplete` | warning | Item is still assigned to a completed iteration but is not finished |
+| `PM016` | `orphaned-item` | error | Linked issue or pull request is no longer accessible |
+
+`PM006` compares filter qualifiers with the project field names, so views that use
+qualifiers this version does not know about are reported as findings.
+Archived items are only checked when `--include-archived` is given, except for
+`PM014` which always inspects archived items.
+
+```sh
+# Lint project #1 of the current owner
+gh pm-kit projects lint 1
+
+# Lint a specific owner's project
+gh pm-kit projects lint 1 --owner my-org
+
+# Run only the consistency rules
+gh pm-kit projects lint 1 --rule PM010,PM011,PM014
+
+# Skip the informational rules
+gh pm-kit projects lint 1 --ignore PM003,PM005,PM006
+
+# Use a different status field and done statuses
+gh pm-kit projects lint 1 --status-field Stage --done-status Shipped,Cancelled
+
+# Require a field to be filled in on every item
+gh pm-kit projects lint 1 --require Priority
+
+# Fail the run on warnings as well
+gh pm-kit projects lint 1 --fail-on warning
+
+# Report findings without failing the run
+gh pm-kit projects lint 1 --exit-zero
+
+# Output as JSON
+gh pm-kit projects lint 1 --format json
+
+# List the error findings with jq
+gh pm-kit projects lint 1 --exit-zero --format json \
+  --jq '.findings[] | select(.severity == "error") | "\(.ruleId) \(.itemTitle)"'
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-o, --owner string` | current owner | Owner in the format `[HOST/]OWNER` |
+| `--config string` | `.github/pm-kit.yml`, `.github/pm-kit.yaml` | Configuration file to read lint defaults from |
+| `--rule strings` | all rules | Rule IDs to run |
+| `--ignore strings` | | Rule IDs to skip |
+| `--status-field string` | `Status` | Name of the single-select field that holds the item status |
+| `--done-status strings` | `Done,Closed,Complete,Completed` | Status values that mean the work is finished |
+| `--in-progress-status strings` | `In Progress,In Review,Doing` | Status values that mean the work is ongoing |
+| `--require strings` | | Field names that every item must have a value for (`PM002`) |
+| `--stale-days int` | `30` | Days after which an unfinished item is reported as stale (`PM012`) |
+| `--status-update-days int` | `14` | Days after which the latest status update is reported as stale (`PM004`) |
+| `--include-archived` | `false` | Check archived items as well |
+| `--fail-on string` | `error` | Lowest severity that makes the command exit non-zero: `error\|warning\|info` |
+| `--exit-zero` | `false` | Always exit with code 0, even when findings are reported |
+| `--color string` | `auto` | Colorize output: `always\|never\|auto` |
+| `--format string` | | Output format: `json` |
+| `-q, --jq expression` | | Filter JSON output using a jq expression |
+| `-t, --template string` | | Format JSON output using a Go template |
+
+#### Lint configuration file
+
+Lint defaults can be stored in `.github/pm-kit.yml` (or `.github/pm-kit.yaml`), which is
+loaded automatically from the current directory.
+Every key is optional, unknown keys are rejected, and flags always take precedence over
+the file. The `severity` map is the only way to change the severity of a rule.
+
+```yaml
+lint:
+  status-field: Status
+  done-statuses: [Done, Shipped]
+  in-progress-statuses: [In Progress, In Review]
+  required-fields: [Priority]
+  stale-days: 30
+  status-update-days: 14
+  include-archived: false
+  fail-on: error
+  rules: []          # empty means every rule
+  ignore: [PM003, PM005]
+  severity:
+    PM012: error
+```
 
 ---
 
