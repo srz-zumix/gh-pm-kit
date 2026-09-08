@@ -84,3 +84,40 @@ func TestRenderProjectLintMarkdownWithoutFindings(t *testing.T) {
 		t.Errorf("output should report that nothing was found\n%s", buf.String())
 	}
 }
+
+// TestRenderProjectLintMarkdownEscapesBrackets verifies that user-controlled titles with
+// brackets, backslashes, pipes, and newlines are escaped in both plain cells and link labels
+// so the job-summary table and its links stay valid.
+func TestRenderProjectLintMarkdownEscapesBrackets(t *testing.T) {
+	var buf bytes.Buffer
+	report := &ProjectLintReport{
+		Label: "#1 octo",
+		Title: "Roadmap",
+		Findings: []ProjectLintFinding{
+			// Linked item: the title becomes the link label.
+			{RuleID: "PM010", RuleName: "closed-issue-not-done", Severity: "error", Message: `bug in a\[b]`, ItemID: "i2", ItemTitle: `[WIP] a|b`, ItemNumber: 2, ItemURL: "https://github.com/octo/repo/issues/2"},
+			// Unlinked (project-wide) finding: message goes into a plain cell.
+			{RuleID: "PM005", RuleName: "unused-select-option", Severity: "info", Message: "line1\r\nline2"},
+		},
+		Summary: ProjectLintSummary{Errors: 1, Infos: 1},
+	}
+	if err := RenderProjectLintMarkdown(&buf, report); err != nil {
+		t.Fatalf("RenderProjectLintMarkdown returned error: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		// Link label: brackets and pipe escaped, backslash-before-bracket not reprocessed.
+		`[#2 \[WIP\] a\|b](https://github.com/octo/repo/issues/2)`,
+		// Plain message cell: literal backslash then escaped brackets.
+		`bug in a\\\[b\]`,
+		// CRLF collapses into a single <br>.
+		"line1<br>line2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "line1<br><br>line2") {
+		t.Errorf("CRLF should collapse into a single <br>\n%s", out)
+	}
+}

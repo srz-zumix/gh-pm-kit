@@ -85,17 +85,13 @@ func NewLintCmd() *cobra.Command {
 			if annotate {
 				// Keep the exported data stream clean by moving the workflow commands to stderr;
 				// the Actions runner picks them up from either stream.
-				annotationOut := renderer.IO.Out
-				if renderer.HasExporter() {
-					annotationOut = renderer.IO.ErrOut
-				}
-				if err := pkgrender.RenderProjectLintAnnotations(annotationOut, report); err != nil {
+				if err := pkgrender.RenderProjectLintAnnotations(lintAuxiliaryOutput(renderer), report); err != nil {
 					return fmt.Errorf("failed to write lint annotations: %w", err)
 				}
 			}
 
 			if summaryMarkdown != "" {
-				if err := writeLintMarkdown(summaryMarkdown, renderer.IO.Out, report); err != nil {
+				if err := writeLintMarkdown(summaryMarkdown, lintAuxiliaryOutput(renderer), report); err != nil {
 					return fmt.Errorf("failed to write the Markdown summary to %q: %w", summaryMarkdown, err)
 				}
 			}
@@ -121,7 +117,7 @@ func NewLintCmd() *cobra.Command {
 	f.IntVar(&opts.StatusUpdateDays, "status-update-days", lint.DefaultStatusUpdateDays, "Days after which the latest status update is reported as stale (PM004)")
 	f.BoolVar(&exitZero, "exit-zero", false, "Always exit with code 0, even when findings are reported")
 	f.BoolVar(&annotate, "annotate", false, "Report every finding as a GitHub Actions workflow annotation")
-	f.StringVar(&summaryMarkdown, "summary-markdown", "", "Append a Markdown report to the given file ('-' for stdout), e.g. \"$GITHUB_STEP_SUMMARY\"")
+	f.StringVar(&summaryMarkdown, "summary-markdown", "", "Append a Markdown report to the given file ('-' for stdout, or stderr while an export format is active), e.g. \"$GITHUB_STEP_SUMMARY\"")
 	cmdutil.StringSliceEnumFlag(cmd, &opts.Rules, "rule", "", nil, lint.RuleIDs(), "Rule IDs to run (default: all rules)")
 	cmdutil.StringSliceEnumFlag(cmd, &opts.Ignore, "ignore", "", nil, lint.RuleIDs(), "Rule IDs to skip")
 	cmdutil.StringEnumFlag(cmd, &failOnFlag, "fail-on", "", string(lint.DefaultFailOn), lint.Severities, "Lowest severity that makes the command exit non-zero")
@@ -201,6 +197,16 @@ func resolveLintOptions(cmd *cobra.Command, configPath, failOn string, flagOpts 
 }
 
 // writeLintMarkdown appends the Markdown report to path, or writes it to out when path is "-".
+// lintAuxiliaryOutput returns the stream for secondary output (Actions annotations and the
+// Markdown summary written to '-'). When an exporter is active the primary stdout stream
+// carries machine-readable data, so secondary output is routed to stderr to keep it valid.
+func lintAuxiliaryOutput(renderer *render.Renderer) io.Writer {
+	if renderer.HasExporter() {
+		return renderer.IO.ErrOut
+	}
+	return renderer.IO.Out
+}
+
 func writeLintMarkdown(path string, out io.Writer, report *pkgrender.ProjectLintReport) (err error) {
 	if path == "-" {
 		return pkgrender.RenderProjectLintMarkdown(out, report)

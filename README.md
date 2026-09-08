@@ -287,7 +287,7 @@ Archived items are only checked when `--include-archived` is given, except for
 | `--fail-on string` | `error` | Lowest severity that makes the command exit non-zero: `error\|warning\|info` |
 | `--exit-zero` | `false` | Always exit with code 0, even when findings are reported |
 | `--annotate` | `false` | Report every finding as a GitHub Actions workflow annotation |
-| `--summary-markdown string` | | Append a Markdown report to the given file (`-` for stdout), e.g. `"$GITHUB_STEP_SUMMARY"` |
+| `--summary-markdown string` | | Append a Markdown report to the given file (`-` for stdout, or stderr while an export format is active), e.g. `"$GITHUB_STEP_SUMMARY"` |
 | `--color string` | `auto` | Colorize output: `always\|never\|auto` |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |

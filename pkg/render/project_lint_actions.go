@@ -79,5 +79,17 @@ func projectLintMarkdownItem(f ProjectLintFinding) string {
 }
 
 func escapeMarkdownCell(s string) string {
-	return strings.NewReplacer("|", "\\|", "\r\n", "<br>", "\n", "<br>", "\r", "<br>").Replace(s)
+	// Backslash is listed first so literal backslashes in user-controlled titles are escaped
+	// without double-escaping the backslashes the other rules insert (NewReplacer does a single
+	// pass and never re-scans its own output). "[" and "]" are escaped so a title cannot break
+	// the surrounding link text; "\r\n" precedes "\r"/"\n" so CRLF collapses into one <br>.
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"[", "\\[",
+		"]", "\\]",
+		"|", "\\|",
+		"\r\n", "<br>",
+		"\n", "<br>",
+		"\r", "<br>",
+	).Replace(s)
 }
