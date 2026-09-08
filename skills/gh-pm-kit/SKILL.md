@@ -546,6 +546,9 @@ gh pm-kit projects lint 1 --fail-on warning
 # Report findings without failing the run
 gh pm-kit projects lint 1 --exit-zero
 
+# Annotate the findings on GitHub Actions and append a Markdown report to the job summary
+gh pm-kit projects lint 1 --annotate --summary-markdown "$GITHUB_STEP_SUMMARY"
+
 # Output as JSON
 gh pm-kit projects lint 1 --format json
 
@@ -569,6 +572,8 @@ gh pm-kit projects lint 1 --exit-zero --format json \
 | `--include-archived` | `false` | Check archived items as well |
 | `--fail-on string` | `error` | Lowest severity that makes the command exit non-zero: `error\|warning\|info` |
 | `--exit-zero` | `false` | Always exit with code 0, even when findings are reported |
+| `--annotate` | `false` | Report every finding as a GitHub Actions workflow annotation |
+| `--summary-markdown string` | | Append a Markdown report to the given file (`-` for stdout), e.g. `"$GITHUB_STEP_SUMMARY"` |
 | `--color string` | `auto` | Colorize output: `always\|never\|auto` |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
@@ -1006,6 +1011,65 @@ gh pm-kit discussions search --label bug --label "needs-triage" --owner my-org
 
 # Combine keyword and label filter
 gh pm-kit discussions search "login error" --label bug --repo owner/repo
+```
+
+### Weekly project lint on GitHub Actions
+
+Run `projects lint` on a schedule so board hygiene problems surface as annotations and as a job
+summary. The token needs the `read:project` scope (a classic PAT or a GitHub App token with
+`Projects: read`).
+
+```yaml
+name: project-lint
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh extension install srz-zumix/gh-pm-kit
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      - run: |
+          gh pm-kit projects lint 1 --owner my-org \
+            --annotate \
+            --summary-markdown "$GITHUB_STEP_SUMMARY" \
+            --fail-on warning
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+```
+
+Annotations are written to stdout, or to stderr when `--format` is used, so the exported data
+stays parsable.
+
+### Post the lint report to a pull request
+
+[gh-comment-kit](https://github.com/srz-zumix/gh-comment-kit) replaces the previous comment of the
+same group, so repeated runs update one comment instead of piling up new ones.
+
+```sh
+gh pm-kit projects lint 1 --owner my-org --exit-zero --summary-markdown lint.md
+gh comment-kit review comment "$PR_NUMBER" --group project-lint --update --body-file lint.md
+```
+
+### Monthly project statistics snapshot
+
+```sh
+# Human readable snapshot grouped by status
+gh pm-kit projects stats 1 --owner my-org --group-by Status
+
+# Archive the raw numbers so trends can be compared later
+gh pm-kit projects stats 1 --owner my-org --format json > "stats-$(date +%Y-%m).json"
+
+# Track only the open / closed counts
+gh pm-kit projects stats 1 --owner my-org --format json \
+  --jq '.summary | "\(.closedItems)/\(.countedItems) closed"'
 ```
 
 ---

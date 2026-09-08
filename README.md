@@ -286,6 +286,8 @@ Archived items are only checked when `--include-archived` is given, except for
 | `--include-archived` | `false` | Check archived items as well |
 | `--fail-on string` | `error` | Lowest severity that makes the command exit non-zero: `error\|warning\|info` |
 | `--exit-zero` | `false` | Always exit with code 0, even when findings are reported |
+| `--annotate` | `false` | Report every finding as a GitHub Actions workflow annotation |
+| `--summary-markdown string` | | Append a Markdown report to the given file (`-` for stdout), e.g. `"$GITHUB_STEP_SUMMARY"` |
 | `--color string` | `auto` | Colorize output: `always\|never\|auto` |
 | `--format string` | | Output format: `json` |
 | `-q, --jq expression` | | Filter JSON output using a jq expression |
@@ -311,6 +313,49 @@ lint:
   ignore: [PM003, PM005]
   severity:
     PM012: error
+```
+
+#### GitHub Actions integration
+
+`--annotate` turns every finding into a workflow annotation and `--summary-markdown` appends a
+Markdown report to the job summary, so a scheduled workflow can keep a project healthy.
+Annotations go to stdout, or to stderr when `--format` is used, so the exported data stays parsable.
+
+```yaml
+name: project-lint
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: gh extension install srz-zumix/gh-pm-kit
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      - run: |
+          gh pm-kit projects lint 1 --owner my-org \
+            --annotate \
+            --summary-markdown "$GITHUB_STEP_SUMMARY" \
+            --fail-on warning
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+```
+
+The token needs the `read:project` scope (a classic PAT or a GitHub App token with `Projects: read`).
+
+The Markdown report can also be posted to a pull request with
+[gh-comment-kit](https://github.com/srz-zumix/gh-comment-kit), which replaces the previous comment
+of the same group instead of piling up new ones.
+
+```sh
+gh pm-kit projects lint 1 --owner my-org --exit-zero --summary-markdown lint.md
+gh comment-kit review comment "$PR_NUMBER" --group project-lint --update --body-file lint.md
 ```
 
 ### projects migrate
