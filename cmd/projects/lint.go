@@ -196,7 +196,6 @@ func resolveLintOptions(cmd *cobra.Command, configPath, failOn string, flagOpts 
 	return resolved, nil
 }
 
-// writeLintMarkdown appends the Markdown report to path, or writes it to out when path is "-".
 // lintAuxiliaryOutput returns the stream for secondary output (Actions annotations and the
 // Markdown summary written to '-'). When an exporter is active the primary stdout stream
 // carries machine-readable data, so secondary output is routed to stderr to keep it valid.
@@ -207,6 +206,7 @@ func lintAuxiliaryOutput(renderer *render.Renderer) io.Writer {
 	return renderer.IO.Out
 }
 
+// writeLintMarkdown appends the Markdown report to path, or writes it to out when path is "-".
 func writeLintMarkdown(path string, out io.Writer, report *pkgrender.ProjectLintReport) (err error) {
 	if path == "-" {
 		return pkgrender.RenderProjectLintMarkdown(out, report)
