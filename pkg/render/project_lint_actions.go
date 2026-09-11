@@ -49,7 +49,7 @@ func projectLintAnnotationMessage(f ProjectLintFinding) string {
 // RenderProjectLintMarkdown writes a Markdown report suitable for GITHUB_STEP_SUMMARY.
 func RenderProjectLintMarkdown(w io.Writer, report *ProjectLintReport) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Project lint: %s %s\n\n", report.Label, report.Title)
+	fmt.Fprintf(&b, "## Project lint: %s %s\n\n", escapeMarkdownHeading(report.Label), escapeMarkdownHeading(report.Title))
 	fmt.Fprintf(&b, "%s\n\n", projectLintSummaryLine(report.Summary))
 
 	if len(report.Findings) == 0 {
@@ -94,4 +94,30 @@ var markdownCellEscaper = strings.NewReplacer(
 
 func escapeMarkdownCell(s string) string {
 	return markdownCellEscaper.Replace(s)
+}
+
+// markdownHeadingEscaper protects the single-line Markdown heading from user-controlled
+// project metadata. CR/LF are collapsed to spaces so the title cannot break out of the
+// heading line, and the inline CommonMark punctuation that could alter rendering or inject
+// markup (emphasis, code, links, raw HTML, strikethrough, table pipes) is backslash-escaped.
+// Backslash is listed first so literal backslashes are escaped without touching the
+// backslashes the other rules insert (NewReplacer does a single pass over the input).
+var markdownHeadingEscaper = strings.NewReplacer(
+	"\r\n", " ",
+	"\r", " ",
+	"\n", " ",
+	"\\", "\\\\",
+	"`", "\\`",
+	"*", "\\*",
+	"_", "\\_",
+	"[", "\\[",
+	"]", "\\]",
+	"<", "\\<",
+	">", "\\>",
+	"~", "\\~",
+	"|", "\\|",
+)
+
+func escapeMarkdownHeading(s string) string {
+	return markdownHeadingEscaper.Replace(s)
 }

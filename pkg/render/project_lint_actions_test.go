@@ -85,6 +85,25 @@ func TestRenderProjectLintMarkdownWithoutFindings(t *testing.T) {
 	}
 }
 
+// TestRenderProjectLintMarkdownEscapesHeading verifies that user-controlled project metadata
+// in the summary heading is escaped: CR/LF collapse to spaces (so the title cannot break out
+// of the heading line) and inline Markdown/HTML punctuation is backslash-escaped.
+func TestRenderProjectLintMarkdownEscapesHeading(t *testing.T) {
+	var buf bytes.Buffer
+	report := &ProjectLintReport{
+		Label: "#1 octo",
+		Title: "a*b_c`d~e<f>g|h[i]\r\nsecond # line",
+	}
+	if err := RenderProjectLintMarkdown(&buf, report); err != nil {
+		t.Fatalf("RenderProjectLintMarkdown returned error: %v", err)
+	}
+	out := buf.String()
+	wantHeading := "## Project lint: #1 octo a\\*b\\_c\\`d\\~e\\<f\\>g\\|h\\[i\\] second # line\n"
+	if !strings.Contains(out, wantHeading) {
+		t.Errorf("heading not escaped as expected\nwant substring: %q\ngot:\n%s", wantHeading, out)
+	}
+}
+
 // TestRenderProjectLintMarkdownEscapesBrackets verifies that user-controlled titles with
 // brackets, backslashes, pipes, and newlines are escaped in both plain cells and link labels
 // so the job-summary table and its links stay valid.
