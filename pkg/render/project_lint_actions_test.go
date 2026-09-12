@@ -2,6 +2,8 @@ package render
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,4 +141,78 @@ func TestRenderProjectLintMarkdownEscapesBrackets(t *testing.T) {
 	if strings.Contains(out, "line1<br><br>line2") {
 		t.Errorf("CRLF should collapse into a single <br>\n%s", out)
 	}
+}
+
+// TestRenderProjectLintMarkdownEscapesInlineMarkers verifies that emphasis, code, strikethrough,
+// and raw HTML markers in user-controlled titles and messages are escaped so they render as
+// literal finding text instead of altering the job-summary presentation.
+func TestRenderProjectLintMarkdownEscapesInlineMarkers(t *testing.T) {
+	var buf bytes.Buffer
+	report := &ProjectLintReport{
+		Label: "#1 octo",
+		Title: "Roadmap",
+		Findings: []ProjectLintFinding{
+			// Linked item: the title becomes the link label.
+			{RuleID: "PM010", RuleName: "closed-issue-not-done", Severity: "error", Message: "see `code`", ItemID: "i2", ItemTitle: "*urgent* <details>", ItemNumber: 2, ItemURL: "https://github.com/octo/repo/issues/2"},
+			// Unlinked (project-wide) finding: message goes into a plain cell.
+			{RuleID: "PM005", RuleName: "unused-select-option", Severity: "info", Message: "_name_ ~old~"},
+		},
+		Summary: ProjectLintSummary{Errors: 1, Infos: 1},
+	}
+	if err := RenderProjectLintMarkdown(&buf, report); err != nil {
+		t.Fatalf("RenderProjectLintMarkdown returned error: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		// Link label: emphasis and raw HTML markers escaped.
+		`[#2 \*urgent\* \<details\>](https://github.com/octo/repo/issues/2)`,
+		// Plain message cells: code span, emphasis, and strikethrough markers escaped.
+		"see \\`code\\`",
+		`\_name\_ \~old\~`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\n%s", want, out)
+		}
+	}
+}
+
+// TestWriteProjectLintMarkdown verifies the file/stream handling that lives in the render layer:
+// "-" writes to the provided writer, a path creates or appends to a file, and an unwritable path
+// returns an error.
+func TestWriteProjectLintMarkdown(t *testing.T) {
+	report := &ProjectLintReport{Label: "#1 octo", Title: "Roadmap"}
+
+	t.Run("dash writes to the supplied writer", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := WriteProjectLintMarkdown("-", &buf, report); err != nil {
+			t.Fatalf("WriteProjectLintMarkdown returned error: %v", err)
+		}
+		if !strings.Contains(buf.String(), "## Project lint: #1 octo Roadmap") {
+			t.Errorf("writer did not receive the report\n%s", buf.String())
+		}
+	})
+
+	t.Run("path creates then appends", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "summary.md")
+		if err := WriteProjectLintMarkdown(path, nil, report); err != nil {
+			t.Fatalf("WriteProjectLintMarkdown (create) returned error: %v", err)
+		}
+		if err := WriteProjectLintMarkdown(path, nil, report); err != nil {
+			t.Fatalf("WriteProjectLintMarkdown (append) returned error: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile returned error: %v", err)
+		}
+		if n := strings.Count(string(data), "## Project lint: #1 octo Roadmap"); n != 2 {
+			t.Errorf("expected the report to be appended twice, got %d\n%s", n, data)
+		}
+	})
+
+	t.Run("unwritable path returns an error", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "missing-dir", "summary.md")
+		if err := WriteProjectLintMarkdown(path, nil, report); err == nil {
+			t.Error("expected an error for an unwritable path")
+		}
+	})
 }

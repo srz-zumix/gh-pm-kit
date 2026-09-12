@@ -328,7 +328,8 @@ on:
     - cron: "0 0 * * 1"
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   lint:

@@ -3,7 +3,6 @@ package projects
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -91,7 +90,7 @@ func NewLintCmd() *cobra.Command {
 			}
 
 			if summaryMarkdown != "" {
-				if err := writeLintMarkdown(summaryMarkdown, lintAuxiliaryOutput(renderer), report); err != nil {
+				if err := pkgrender.WriteProjectLintMarkdown(summaryMarkdown, lintAuxiliaryOutput(renderer), report); err != nil {
 					return fmt.Errorf("failed to write the Markdown summary to %q: %w", summaryMarkdown, err)
 				}
 			}
@@ -204,23 +203,6 @@ func lintAuxiliaryOutput(renderer *render.Renderer) io.Writer {
 		return renderer.IO.ErrOut
 	}
 	return renderer.IO.Out
-}
-
-// writeLintMarkdown appends the Markdown report to path, or writes it to out when path is "-".
-func writeLintMarkdown(path string, out io.Writer, report *pkgrender.ProjectLintReport) (err error) {
-	if path == "-" {
-		return pkgrender.RenderProjectLintMarkdown(out, report)
-	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	return pkgrender.RenderProjectLintMarkdown(file, report)
 }
 
 // ruleHelp renders the rule catalog for the command help.

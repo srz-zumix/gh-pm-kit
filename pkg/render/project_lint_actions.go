@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -78,34 +79,13 @@ func projectLintMarkdownItem(f ProjectLintFinding) string {
 	return "[" + label + "](" + f.ItemURL + ")"
 }
 
-// Backslash is listed first so literal backslashes in user-controlled titles are escaped
-// without double-escaping the backslashes the other rules insert (NewReplacer does a single
-// pass and never re-scans its own output). "[" and "]" are escaped so a title cannot break
-// the surrounding link text; "\r\n" precedes "\r"/"\n" so CRLF collapses into one <br>.
-var markdownCellEscaper = strings.NewReplacer(
-	"\\", "\\\\",
-	"[", "\\[",
-	"]", "\\]",
-	"|", "\\|",
-	"\r\n", "<br>",
-	"\n", "<br>",
-	"\r", "<br>",
-)
-
-func escapeMarkdownCell(s string) string {
-	return markdownCellEscaper.Replace(s)
-}
-
-// markdownHeadingEscaper protects the single-line Markdown heading from user-controlled
-// project metadata. CR/LF are collapsed to spaces so the title cannot break out of the
-// heading line, and the inline CommonMark punctuation that could alter rendering or inject
-// markup (emphasis, code, links, raw HTML, strikethrough, table pipes) is backslash-escaped.
-// Backslash is listed first so literal backslashes are escaped without touching the
-// backslashes the other rules insert (NewReplacer does a single pass over the input).
-var markdownHeadingEscaper = strings.NewReplacer(
-	"\r\n", " ",
-	"\r", " ",
-	"\n", " ",
+// markdownInlinePunctuation lists the CommonMark/GFM inline markers that are backslash-escaped so
+// user-controlled project text renders literally instead of as emphasis, code, links, raw HTML,
+// strikethrough, or table pipes. Backslash is listed first so literal backslashes are escaped
+// without touching the backslashes the later rules insert (strings.NewReplacer does a single pass
+// over the input and never re-scans its own output). The cell and heading escapers share this list
+// so they cannot drift apart; they only differ in how line breaks are folded.
+var markdownInlinePunctuation = []string{
 	"\\", "\\\\",
 	"`", "\\`",
 	"*", "\\*",
@@ -116,8 +96,47 @@ var markdownHeadingEscaper = strings.NewReplacer(
 	">", "\\>",
 	"~", "\\~",
 	"|", "\\|",
-)
+}
+
+// markdownCellEscaper escapes inline punctuation and folds CR/LF into a single <br> so multi-line
+// values stay inside one Markdown table cell ("\r\n" precedes "\r"/"\n" to collapse CRLF once).
+var markdownCellEscaper = strings.NewReplacer(append(append([]string{}, markdownInlinePunctuation...),
+	"\r\n", "<br>",
+	"\n", "<br>",
+	"\r", "<br>",
+)...)
+
+func escapeMarkdownCell(s string) string {
+	return markdownCellEscaper.Replace(s)
+}
+
+// markdownHeadingEscaper escapes inline punctuation and folds CR/LF into spaces so user-controlled
+// project metadata cannot break out of the single-line Markdown heading.
+var markdownHeadingEscaper = strings.NewReplacer(append(append([]string{}, markdownInlinePunctuation...),
+	"\r\n", " ",
+	"\r", " ",
+	"\n", " ",
+)...)
 
 func escapeMarkdownHeading(s string) string {
 	return markdownHeadingEscaper.Replace(s)
+}
+
+// WriteProjectLintMarkdown appends the Markdown report to path, creating it if necessary, or writes
+// it to out when path is "-". Keeping the file/stream handling in the render layer lets the command
+// stay a thin orchestrator and lets the output behavior be reused and tested here.
+func WriteProjectLintMarkdown(path string, out io.Writer, report *ProjectLintReport) (err error) {
+	if path == "-" {
+		return RenderProjectLintMarkdown(out, report)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	return RenderProjectLintMarkdown(file, report)
 }
