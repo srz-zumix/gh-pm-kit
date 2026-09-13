@@ -2,6 +2,7 @@ package projects
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -20,6 +21,8 @@ func NewLintCmd() *cobra.Command {
 	var colorFlag string
 	var failOnFlag string
 	var exitZero bool
+	var annotate bool
+	var summaryMarkdown string
 	var opts lint.Options
 	format := struct {
 		Exporter cmdutil.Exporter
@@ -39,6 +42,8 @@ func NewLintCmd() *cobra.Command {
 			"qualifiers this version does not know about are reported as findings.\n\n" +
 			"Archived items are only checked when --include-archived is given, except for\n" +
 			"PM014 which always inspects archived items.\n\n" +
+			"Use --annotate on GitHub Actions to turn every finding into a workflow annotation,\n" +
+			"and --summary-markdown \"$GITHUB_STEP_SUMMARY\" to append a Markdown report to the job summary.\n\n" +
 			"The project can be specified by its number or by its URL\n" +
 			"(e.g. https://github.com/orgs/my-org/projects/1).\n\n" +
 			"Owner format: '[HOST/]OWNER' (e.g. 'my-org' or 'github.com/my-org').",
@@ -76,6 +81,20 @@ func NewLintCmd() *cobra.Command {
 				return fmt.Errorf("failed to render lint results: %w", err)
 			}
 
+			if annotate {
+				// Keep the exported data stream clean by moving the workflow commands to stderr;
+				// the Actions runner picks them up from either stream.
+				if err := pkgrender.RenderProjectLintAnnotations(lintAuxiliaryOutput(renderer), report); err != nil {
+					return fmt.Errorf("failed to write lint annotations: %w", err)
+				}
+			}
+
+			if summaryMarkdown != "" {
+				if err := pkgrender.WriteProjectLintMarkdown(summaryMarkdown, lintAuxiliaryOutput(renderer), report); err != nil {
+					return fmt.Errorf("failed to write the Markdown summary to %q: %w", summaryMarkdown, err)
+				}
+			}
+
 			if !exitZero && lint.ShouldFail(report, resolved.FailOn) {
 				cmd.SilenceUsage = true
 				return fmt.Errorf("lint found %d error(s), %d warning(s), and %d info(s) in project #%d of '%s'; failure threshold is %q",
@@ -96,6 +115,8 @@ func NewLintCmd() *cobra.Command {
 	f.IntVar(&opts.StaleDays, "stale-days", lint.DefaultStaleDays, "Days after which an unfinished item is reported as stale (PM012)")
 	f.IntVar(&opts.StatusUpdateDays, "status-update-days", lint.DefaultStatusUpdateDays, "Days after which the latest status update is reported as stale (PM004)")
 	f.BoolVar(&exitZero, "exit-zero", false, "Always exit with code 0, even when findings are reported")
+	f.BoolVar(&annotate, "annotate", false, "Report every finding as a GitHub Actions workflow annotation")
+	f.StringVar(&summaryMarkdown, "summary-markdown", "", "Append a Markdown report to the given file ('-' for stdout, or stderr while an export format is active), e.g. \"$GITHUB_STEP_SUMMARY\"")
 	cmdutil.StringSliceEnumFlag(cmd, &opts.Rules, "rule", "", nil, lint.RuleIDs(), "Rule IDs to run (default: all rules)")
 	cmdutil.StringSliceEnumFlag(cmd, &opts.Ignore, "ignore", "", nil, lint.RuleIDs(), "Rule IDs to skip")
 	cmdutil.StringEnumFlag(cmd, &failOnFlag, "fail-on", "", string(lint.DefaultFailOn), lint.Severities, "Lowest severity that makes the command exit non-zero")
@@ -172,6 +193,16 @@ func resolveLintOptions(cmd *cobra.Command, configPath, failOn string, flagOpts 
 	}
 	resolved.FailOn = failOnSeverity
 	return resolved, nil
+}
+
+// lintAuxiliaryOutput returns the stream for secondary output (Actions annotations and the
+// Markdown summary written to '-'). When an exporter is active the primary stdout stream
+// carries machine-readable data, so secondary output is routed to stderr to keep it valid.
+func lintAuxiliaryOutput(renderer *render.Renderer) io.Writer {
+	if renderer.HasExporter() {
+		return renderer.IO.ErrOut
+	}
+	return renderer.IO.Out
 }
 
 // ruleHelp renders the rule catalog for the command help.

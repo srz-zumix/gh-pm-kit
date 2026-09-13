@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -72,5 +73,51 @@ func TestProjectLintSeverityLabelNormalizesCase(t *testing.T) {
 		if !strings.Contains(got, strings.ToUpper(tc.severity)) {
 			t.Errorf("severity %q: label should be uppercased, got %q", tc.severity, got)
 		}
+	}
+}
+
+// TestProjectLintItemLabelTruncationAcrossRenderers guards the no-truncation path used by the
+// Actions and Markdown renderers: the terminal table truncates long titles (maxTitle 40) while the
+// annotation and Markdown outputs must retain the full title (maxTitle 0). All other fixtures use
+// short titles, so a regression to unconditional truncation would otherwise go unnoticed.
+func TestProjectLintItemLabelTruncationAcrossRenderers(t *testing.T) {
+	longTitle := "This project item title is intentionally longer than forty characters"
+	report := &ProjectLintReport{
+		Label: "#1 octo",
+		Title: "Roadmap",
+		Findings: []ProjectLintFinding{
+			{RuleID: "PM010", RuleName: "closed-issue-not-done", Severity: "error", Message: "closed but in progress", ItemID: "i7", ItemTitle: longTitle, ItemNumber: 7},
+		},
+		Summary: ProjectLintSummary{Errors: 1},
+	}
+
+	wantTruncated := "#7 " + string([]rune(longTitle)[:37]) + "..."
+
+	r := ghrender.NewStringRenderer(nil)
+	if err := RenderProjectLint(&r.Renderer, report); err != nil {
+		t.Fatalf("RenderProjectLint returned error: %v", err)
+	}
+	terminal := r.Stdout.String()
+	if !strings.Contains(terminal, wantTruncated) {
+		t.Errorf("terminal output should contain the truncated label %q\n%s", wantTruncated, terminal)
+	}
+	if strings.Contains(terminal, longTitle) {
+		t.Errorf("terminal output should not contain the full title\n%s", terminal)
+	}
+
+	var annotations bytes.Buffer
+	if err := RenderProjectLintAnnotations(&annotations, report); err != nil {
+		t.Fatalf("RenderProjectLintAnnotations returned error: %v", err)
+	}
+	if !strings.Contains(annotations.String(), "#7 "+longTitle) {
+		t.Errorf("annotation output should retain the full title\n%s", annotations.String())
+	}
+
+	var markdown bytes.Buffer
+	if err := RenderProjectLintMarkdown(&markdown, report); err != nil {
+		t.Fatalf("RenderProjectLintMarkdown returned error: %v", err)
+	}
+	if !strings.Contains(markdown.String(), "#7 "+longTitle) {
+		t.Errorf("Markdown output should retain the full title\n%s", markdown.String())
 	}
 }

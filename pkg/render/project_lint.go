@@ -54,7 +54,7 @@ func RenderProjectLint(r *ghrender.Renderer, report *ProjectLintReport) error {
 		table.Append([]string{
 			projectLintSeverityLabel(f.Severity, r.Color),
 			f.RuleID + " " + f.RuleName,
-			projectLintItemLabel(f),
+			projectLintItemLabel(f, 40),
 			f.Message,
 		})
 	}
@@ -84,11 +84,15 @@ func projectLintSeverityLabel(severity string, colorize bool) string {
 }
 
 // projectLintItemLabel builds the ITEM column, marking project-wide findings.
-func projectLintItemLabel(f ProjectLintFinding) string {
+// The title is truncated when maxTitle is positive.
+func projectLintItemLabel(f ProjectLintFinding, maxTitle int) string {
 	if f.ItemID == "" {
 		return "(project)"
 	}
-	title := truncate(f.ItemTitle, 40)
+	title := f.ItemTitle
+	if maxTitle > 0 {
+		title = truncate(title, maxTitle)
+	}
 	if f.ItemNumber == 0 {
 		return title
 	}
